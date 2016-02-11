@@ -1,0 +1,128 @@
+diff --git a/doc/src/sgml/client-auth.sgml b/doc/src/sgml/client-auth.sgml
+index 5eef08f..f36a623 100644
+--- a/doc/src/sgml/client-auth.sgml
++++ b/doc/src/sgml/client-auth.sgml
+@@ -738,9 +738,9 @@ local   db1,db2,@demodbs  all                                   md5
+    the remainder of the field is treated as a regular expression.
+    (See <xref linkend="posix-syntax-details"> for details of
+    <productname>PostgreSQL</>'s regular expression syntax.)  The regular
+-   expression can include a single capture, or parenthesized subexpression,
++   expression can include 1 to 9 captures, or parenthesized subexpressions,
+    which can then be referenced in the <replaceable>database-username</>
+-   field as <literal>\1</> (backslash-one).  This allows the mapping of
++   field as <literal>\1</> (backslash-one) to <literal>\9</>.  This allows the mapping of
+    multiple user names in a single line, which is particularly useful for
+    simple syntax substitutions.  For example, these entries
+ <programlisting>
+diff --git a/src/backend/libpq/hba.c b/src/backend/libpq/hba.c
+index 97afce3..45eb441 100644
+--- a/src/backend/libpq/hba.c
++++ b/src/backend/libpq/hba.c
+@@ -796,10 +796,10 @@ check_same_host_or_net(SockAddr *raddr, IPCompareMethod method)
+ } while (0);
+ 
+ #define IDENT_MULTI_VALUE(tokens) do {\
+-	if (tokens->length > 1) { \
++	if (tokens->length > 9) { \
+ 		ereport(LOG, \
+ 				(errcode(ERRCODE_CONFIG_FILE_ERROR), \
+-				 errmsg("multiple values in ident field"), \
++				 errmsg("more than 9 values in ident field"), \
+ 				 errcontext("line %d of configuration file \"%s\"", \
+ 						line_number, IdentFileName))); \
+ 		return NULL; \
+@@ -1943,20 +1943,24 @@ check_ident_usermap(IdentLine *identLine, const char *usermap_name,
+ 		/*
+ 		 * When system username starts with a slash, treat it as a regular
+ 		 * expression. In this case, we process the system username as a
+-		 * regular expression that returns exactly one match. This is replaced
+-		 * for \1 in the database username string, if present.
++		 * regular expression that returns 1 to 9 capture groups. These groups
++		 * replace \1 to \9 in the database username string, if present.
+ 		 */
+ 		int			r;
+-		regmatch_t	matches[2];
++		regmatch_t	matches[10];
+ 		pg_wchar   *wstr;
+ 		int			wlen;
+ 		char	   *ofs;
+ 		char	   *regexp_pgrole;
++		char	   *new_pgrole;
++		int			match_indx;
++		const char *match_args[10];
+ 
+ 		wstr = palloc((strlen(ident_user) + 1) * sizeof(pg_wchar));
++
+ 		wlen = pg_mb2wchar_with_len(ident_user, wstr, strlen(ident_user));
+ 
+-		r = pg_regexec(&identLine->re, wstr, wlen, 0, NULL, 2, matches, 0);
++		r = pg_regexec(&identLine->re, wstr, wlen, 0, NULL, 10, matches, 0);
+ 		if (r)
+ 		{
+ 			char		errstr[100];
+@@ -1976,13 +1980,25 @@ check_ident_usermap(IdentLine *identLine, const char *usermap_name,
+ 			return;
+ 		}
+ 		pfree(wstr);
+-
+-		if ((ofs = strstr(identLine->pg_role, "\\1")) != NULL)
++		
++		match_args[0] = "";
++		match_args[1] = "\\1";
++		match_args[2] = "\\2";
++		match_args[3] = "\\3";
++		match_args[4] = "\\4";
++		match_args[5] = "\\5";
++		match_args[6] = "\\6";
++		match_args[7] = "\\7";
++		match_args[8] = "\\8";
++		match_args[9] = "\\9";
++		match_indx = 1;
++		regexp_pgrole = pstrdup(identLine->pg_role);
++		while ((ofs = strstr(regexp_pgrole, match_args[match_indx])) != NULL && match_indx <= 9)
+ 		{
+ 			int			offset;
+ 
+-			/* substitution of the first argument requested */
+-			if (matches[1].rm_so < 0)
++			/* substitution argument requested */
++			if (matches[match_indx].rm_so < 0)
+ 			{
+ 				ereport(LOG,
+ 						(errcode(ERRCODE_INVALID_REGULAR_EXPRESSION),
+@@ -1993,21 +2009,20 @@ check_ident_usermap(IdentLine *identLine, const char *usermap_name,
+ 			}
+ 
+ 			/*
+-			 * length: original length minus length of \1 plus length of match
+-			 * plus null terminator
+-			 */
+-			regexp_pgrole = palloc0(strlen(identLine->pg_role) - 2 + (matches[1].rm_eo - matches[1].rm_so) + 1);
+-			offset = ofs - identLine->pg_role;
+-			memcpy(regexp_pgrole, identLine->pg_role, offset);
+-			memcpy(regexp_pgrole + offset,
+-				   ident_user + matches[1].rm_so,
+-				   matches[1].rm_eo - matches[1].rm_so);
+-			strcat(regexp_pgrole, ofs + 2);
+-		}
+-		else
+-		{
+-			/* no substitution, so copy the match */
+-			regexp_pgrole = pstrdup(identLine->pg_role);
++			* length: original length minus length of \x plus length of match
++			* plus null terminator
++			*/
++			new_pgrole = palloc0(strlen(regexp_pgrole) - 2 + (matches[match_indx].rm_eo - matches[match_indx].rm_so) + 1);
++			offset = ofs - regexp_pgrole;
++			memcpy(new_pgrole, regexp_pgrole, offset);
++
++			memcpy(new_pgrole + offset,
++				   ident_user + matches[match_indx].rm_so,
++				   matches[match_indx].rm_eo - matches[match_indx].rm_so);
++			strcat(new_pgrole, ofs + 2);
++			match_indx++;
++			pfree(regexp_pgrole);
++			regexp_pgrole = new_pgrole;
+ 		}
+ 
+ 		/*

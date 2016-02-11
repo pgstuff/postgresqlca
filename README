@@ -1,0 +1,204 @@
+* Modify the values in ca_server/ca/settings.conf
+
+* Run on the CA server (the following instructions assume EL 6.x with PostgreSQL RPM 9.5):
+
+sudo yum install dialog p7zip zip bzip2 openssl pwgen expect mailx
+sudo $(pwd)/ca_install.sh
+
+* Securely store the CA pass phrases.
+
+* Change "$(hostname)" if PostgreSQL is installed on a different server.
+
+sudo -u pgintermediateca /home/pgintermediateca/pg-server-intermediate-ca/createkeypair.sh $(hostname)
+
+* Sign the request.
+
+* Enter a password for the server key archive file (keep this password secret for as long as the archive data is recoverable).  After the archive is extracted, forget the password.
+
+* Copy the archive file to the PostgreSQL server and copy and paste the extract commands into the destination server's terminal.
+
+* Run:
+sudo ~/postgresqlca/postgresql_server/add_key_to_postgres.sh $(pwd) /var/lib/pgsql/9.5/data pg-client-intermediate-ca
+sudo service postgresql-9.5 restart
+
+* Create a client key and request for it to be signed:
+
+mkdir ~/.postgresql
+openssl genrsa -out ~/.postgresql/postgresql.key 2048
+openssl req -key ~/.postgresql/postgresql.key -new -days 31 -sha256 -subj '/C=CC/ST=StateHere/L=LocHere/O=OrgNameHere/CN=USERNAMEHERE/emailAddress=EMAILADDRHERE' -out ~/postgresql-cert-request-${USER}.cert.pem
+
+* If you want a subject template based on your settings, run this on the CA server:
+~pgintermediateca/pg-server-intermediate-ca/getsubject.sh USERNAMEHERE EMAILHERE
+
+* On the CA server, run:
+
+sudo -u pgintermediateca /home/pgintermediateca/pg-client-intermediate-ca/signandmail.sh /tmp/postgresql-cert-request-USERNAMEHERE.cert.pem
+
+* On the client, run:
+
+cd ~/.postgresql
+unzip ~/postgresql.zip
+chmod 600 postgresql.key
+
+* If a client cannot create a key and request, one can be produced using:
+
+sudo -u pgintermediateca /home/pgintermediateca/pg-client-intermediate-ca/createkeypair.sh $USER EMAILADDRHERE
+
+* Securely & temporally store or transmit the archive password.
+
+On the client, run:
+
+mkdir ~/.postgresql
+cd ~/.postgresql
+7za e ~/postgresql.zip
+
+* Enter the archive password.
+
+* Run:
+
+rmdir postgresql
+rm ~/postgresql.zip
+chmod 600 postgresql.key
+
+Suggested $PGDATA/pg_hba.conf for disallowing passwords:
+
+#host    all             fdwusr          all                     md5
+local   all             all                                     peer
+hostnossl all           all             samehost                ident
+hostssl all             all             all                     cert clientcert=1
+
+
+SSL & certificates are required for remote connections.
+
+Local connections can connect without a certificate using a Unix domain socket.
+
+Local connections can be made without a certificate and use a TCP connection by
+using an ident server.  If an ident server is not already in use by another
+application, a firewall rule should be added to prevent attacks from the
+network.  A firewall rule should be added to limit connections to TCP port 113
+to connections that originate from the same host.  An alternative to this is to
+make the ident service bind (listen) to a loopback address only.  However, doing
+this will cause local connections to fail if the TCP address is or resolves to
+an address on an external interface (instead of the loopback interface).  This
+is why a firewall rule is preferred.
+
+Uncomment the last two lines to enable passwords, but only when all other
+methods have been tried.
+
+If you are using postgres_fdw on localhost, specify /tmp in host to use a Unix
+domain socket.  Map the user name to postgres.  If you do not want to use the
+postgres user or need to connect remotely, then for now you must use md5.
+Specify the user name in 3rd field.
+
+For lines that start with host (including ssl and nossl), you can restrict by IP
+address by duplicating the line and replacing the 3rd column's all with
+IP-address/mask-length notation.  Use the IPv4 range/address on one line and the
+IPv6 range/address on the other.  Note that if you are not using IPv6 on your
+local network, the loopback interface may still use it.  Also consider using
+samenet if all you only want to match addresses that are on the same subnet as
+the server.  With samenet, if your subnet gets assigned a different range, then
+this file will not have to be updated unlike a hard coded subnet range.
+
+If you only need Unix domain sockets and/or certificates, you may disable the
+ident lines in $PGDATA/pg_hba.conf and skip the following oidentd install and
+configuration instructions.
+
+sudo yum install oidentd
+
+sudo sh -c 'cat > /etc/sysconfig/oidentd' << "EOF"
+# Oidentd startup options. See oidentd(8) man page for a complete list.
+OIDENTD_OPTIONS="-q -u nobody -g nobody -a ::"
+EOF
+
+sudo sh -c 'cat > /etc/oidentd.conf' << EOF
+default {
+        default {
+                deny spoof
+                deny spoof_all
+                deny spoof_privport
+                allow random_numeric
+                allow numeric
+                deny hide
+                force reply "UNKNOWN"
+        }
+}
+
+default {
+        to 127.0.0.1 from 127.0.0.1 {
+                deny spoof
+                deny spoof_all
+                deny spoof_privport
+                deny hide
+        }
+        to ::1 from ::1 {
+                deny spoof
+                deny spoof_all
+                deny spoof_privport
+                deny hide
+        }
+        to $(hostname) from $(hostname) {
+                deny spoof
+                deny spoof_all
+                deny spoof_privport
+                deny hide
+        }
+}
+EOF
+
+Unfortunately, there is no samehost directive, so only both IP loopback adapters
+and the default address are listed.  If there are additional interfaces, they
+may have to be added.
+
+sudo service oidentd start
+sudo chkconfig oidentd on
+
+* Certificates within a CA are unique by common name (user name for clients, server name for servers).
+If you want to produce another certificates, you must revoke the prior one with:
+
+sudo -u pgintermediateca /home/pgintermediateca/pg-client-intermediate-ca/revoke.sh
+
+Note that CRL functionality in PostgreSQL might be broken.  Using CRL's might
+result in a generic certificate error.  In which case, do not revoke
+certificates.  Instead, issue common names with a version sequence at the end of
+the common name.  Use pg_ident.conf to match only the active version sequence.
+By replacing an older sequence number, you prevent the older version from being
+used.  The map also allows the PostgreSQL user to remain the same, regardless of
+the changing common name.  By leaving the old certificates as active, the
+openssl database will not allow new certificates to be issued with the prior
+common names, preventing compromised certificates from sharing a common name
+with an active one.
+
+Unfortunately, certificate data (including the CRL) is not reread from disk
+unless the service is restarted.
+
+If you want to use a different user naming convention for your common names, and
+an abbreviated convention for your database user names, then you may use
+pg_ident.conf to allow certificates with the longer names.  Note that
+pg_ident.conf does not transform the common name into the PostgreSQL user name,
+it is simply a rule that matches both the certificate's common name and the
+different PostgreSQL user name as specified by the client.  If both do not
+match, the HBA entries that use that map do not match.
+
+See the documentation on how to use regular expressions if you want to have one
+entry for multiple users.  A patch may be required if your expression requires
+more than one capture group, such as transforming first name dot last name into
+first initial last name.  See the ident_regex_upgrade directory for a patch and
+a map entry example.  If you require a specific sequence value for each common
+name, then you will be listing each specific common name with its sequence, so
+regular expressions will not be useful.
+
+Optionally, add ":!SSLv2:!SSLv3:!TLSv1.0:!TLSv1.1" to disallow ciphers that work
+under unsafe SSL and TLS protocols.  Note that PostgreSQL connections do not use
+as many TLS features as HTTPS TLS connections do.  For example, it does not
+support session resumption, so any session resumption vulnerability is not
+applicable to PostgreSQL.  It is not possible to exploit some of the features
+that it does not make use of.  Disabling older TLS protocols may not be
+necessary to protect against known vulnerabilities.  However, it may be
+advantageous to ensure that your clients are using the latest secure technology
+even if there are no known usable exploits.
+
+This script will automatically set the ciphers:
+sed -ri $'s/#*(ssl_ciphers).*$/\\1 = \'HIGH:!MEDIUM:!3DES:!aNULL:!SSLv3:!TLSv1\'/' "$PGDATA/postgresql.conf"
+
+Use this to to review the list of ciphers that will be allowed:
+openssl ciphers -v "$(grep 'ssl_ciphers.*=.*'"'"'.*'"'" $PGDATA/postgresql.conf | cut -f 2 -d "'")"
