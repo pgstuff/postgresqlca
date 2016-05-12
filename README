@@ -66,6 +66,8 @@ Suggested $PGDATA/pg_hba.conf for disallowing passwords:
 local   all             all                                     peer
 hostnossl all           all             samehost                ident
 hostssl all             all             all                     cert clientcert=1
+#host    all             all             0.0.0.0/0               md5
+#host    all             all             ::/0                    md5
 
 
 SSL & certificates are required for remote connections.
