@@ -1,0 +1,545 @@
+#! /bin/bash
+
+set -eu -o pipefail
+
+script_dir="$(dirname "$(readlink -f "$0")")"
+base_dir="$(dirname "$script_dir")"
+
+DIALOG_CANCEL=1
+DIALOG_ESC=255
+
+var_path="$base_dir/var"
+backtitle="PostgreSQL SSL Certificate Authority"
+
+if [ -e "$var_path/ca_chain.var" ]; then
+    ca_chain="$(cat "$var_path/ca_chain.var")"
+    case "$ca_chain" in
+        root)
+            backtitle="$backtitle - Root"
+        ;;
+        intermediate)
+            backtitle="$backtitle - Intermediate"
+        ;;
+        *)
+            echo "The ca_chain (\"$ca_chain\") var is invalid." >&2
+            exit 2
+        ;;
+    esac
+fi
+
+if [ -e "$var_path/ca_usage.var" ]; then
+    ca_usage="$(cat "$var_path/ca_usage.var")"
+    case "$ca_usage" in
+        server)
+            backtitle="$backtitle - Server"
+        ;;
+        client)
+            backtitle="$backtitle - Client"
+        ;;
+        *)
+            echo "The ca_usage (\"$ca_usage\") var is invalid." >&2
+            exit 2
+        ;;
+    esac
+fi
+
+function valid_key_len() {
+    if [[ ! $1 =~ ^[0-9]+$ ]]; then
+        echo "A key length must be a positive whole number."
+    elif [ $1 -lt 64 ]; then
+        echo "A key length must be no smaller than 64."
+    elif [ $1 -gt 8192 ]; then
+        echo "A key length must be no larger than 8192."
+    fi
+}
+
+function valid_cert_days() {
+    if [[ ! $1 =~ ^[0-9]+$ ]]; then
+        echo "A number of days must be a positive whole number."
+    elif [ $1 -lt 1 ]; then
+        echo "A number of days must be no smaller than 1."
+    elif [ $1 -gt 43830 ]; then
+        echo "A number of days must be no larger than 43830."
+    fi
+}
+
+function get_var_form() {
+    local var_name=$1
+    local selected_widget_type=$2
+    local selected_widget_op=$3
+    local widget_type=input
+    local order=10
+    local label=$1
+    local entries=
+    local flen=35
+    local ilen=64
+    local itype=0
+    local valid_fun=
+    local valid_args=
+
+    case $var_name in
+        ca_cipher)
+            label="CA Cipher"
+            order=1
+            widget_type=radiolist
+            entries="aes256=AES 256"
+        ;;
+        ca_key_len)
+            label="CA Key Len"
+            order=2
+            flen=5
+            ilen=4
+            valid_fun=valid_key_len
+        ;;
+        ca_message_digest)
+            label="CA Message Digest"
+            order=3
+            widget_type=radiolist
+            entries="sha256=Secure Hash Algorithm 2 - SHA-256:sha384=Secure Hash Algorithm 2 - SHA-384:sha512=Secure Hash Algorithm 2 - SHA-512"
+        ;;
+        ca_country_code)
+            label="CA ISO 3166 Country Code"
+            order=4
+            flen=3
+            ilen=2
+        ;;
+        ca_state_or_province_name)
+            label="CA State or Province Name"
+            order=5
+        ;;
+        ca_locality_name)
+            label="CA Locality Name"
+            order=6
+        ;;
+        ca_organization_name)
+            label="CA Organization Name"
+            order=7
+        ;;
+        ca_organizational_unit_name)
+            label="CA Organizational Unit Name"
+            order=8
+        ;;
+        root_common_name)
+            label="Root Common Name"
+            order=9
+        ;;
+        root_cert_days)
+            label="Root Cert Validity in Days"
+            order=10
+            flen=6
+            ilen=5
+            valid_fun=valid_cert_days
+        ;;
+        root_crl_days)
+            label="Root CRL Validity in Days"
+            order=11
+            flen=6
+            ilen=5
+            valid_fun=valid_cert_days
+        ;;
+        intermediate_common_name)
+            label="Intermediate Common Name"
+            order=12
+        ;;
+        intermediate_cert_days)
+            label="Intermediate Cert Validity in Days"
+            order=13
+            flen=6
+            ilen=5
+            valid_fun=valid_cert_days
+        ;;
+        intermediate_crl_days)
+            label="Intermediate CRL Validity in Days"
+            order=14
+            flen=6
+            ilen=5
+            valid_fun=valid_cert_days
+        ;;
+        server_cipher)
+            label="Server Cipher"
+            order=15
+            widget_type=radiolist
+            entries="aes256=AES 256"
+        ;;
+        server_key_len)
+            label="Server Key Len"
+            order=16
+            flen=5
+            ilen=4
+            valid_fun=valid_key_len
+        ;;
+        server_message_digest)
+            label="Server Message Digest"
+            order=17
+            widget_type=radiolist
+            entries="sha256=Secure Hash Algorithm 2 - SHA-256:sha384=Secure Hash Algorithm 2 - SHA-384:sha512=Secure Hash Algorithm 2 - SHA-512"
+        ;;
+        server_country_code)
+            label="Server ISO 3166 Country Code"
+            order=18
+            flen=3
+            ilen=2
+        ;;
+        server_state_or_province_name)
+            label="Server State or Province Name"
+            order=19
+        ;;
+        server_locality_name)
+            label="Server Locality Name"
+            order=20
+        ;;
+        server_organization_name)
+            label="Server Organization Name"
+            order=21
+        ;;
+        server_organizational_unit_name)
+            label="Server Organizational Unit Name"
+            order=22
+        ;;
+        server_cert_days)
+            label="Server Cert Validity in Days"
+            order=23
+            flen=6
+            ilen=5
+            valid_fun=valid_cert_days
+        ;;
+        client_cipher)
+            label="Client Cipher"
+            order=24
+            widget_type=radiolist
+            entries="aes256=AES 256"
+        ;;
+        client_key_len)
+            label="Client Key Len"
+            order=25
+            flen=5
+            ilen=4
+            valid_fun=valid_key_len
+        ;;
+        client_message_digest)
+            label="Client Message Digest"
+            order=26
+            widget_type=radiolist
+            entries="sha256=Secure Hash Algorithm 2 - SHA-256:sha384=Secure Hash Algorithm 2 - SHA-384:sha512=Secure Hash Algorithm 2 - SHA-512"
+        ;;
+        client_country_code)
+            label="Client ISO 3166 Country Code"
+            order=27
+            flen=3
+            ilen=2
+        ;;
+        client_state_or_province_name)
+            label="Client State or Province Name"
+            order=28
+        ;;
+        client_locality_name)
+            label="Client Locality Name"
+            order=29
+        ;;
+        client_organization_name)
+            label="Client Organization Name"
+            order=30
+        ;;
+        client_organizational_unit_name)
+            label="Client Organizational Unit Name"
+            order=31
+        ;;
+        client_cert_days)
+            label="Client Cert Validity in Days"
+            order=32
+            flen=6
+            ilen=5
+            valid_fun=valid_cert_days
+        ;;
+        ca_chain)
+            widget_type=hidden
+        ;;
+        ca_usage)
+            widget_type=hidden
+        ;;
+        *)
+            widget_type=input
+        ;;
+    esac
+
+    if [ "$selected_widget_op" == "=" ]; then
+        if [ "$selected_widget_type" != "$widget_type" ]; then
+            return 0
+        fi
+    elif [ "$selected_widget_op" == "!=" ]; then
+        if [ "$selected_widget_type" = "$widget_type" ]; then
+            return 0
+        fi
+    else
+        echo "Unknown selected_widget_op \"$selected_widget_op\"" >&2
+        exit 2
+    fi
+
+    case $widget_type in
+        input)
+            if [ $itype -eq 0 ]; then
+                if [ ! -w "$var_path/$var_name.var" ]; then
+                    itype=2
+                fi
+            fi
+            echo -e "$order\t$var_name\t$label\t$flen\t$ilen\t$itype\t$valid_fun\t$valid_args"
+        ;;
+        radiolist)
+            echo -e "$order\t$var_name\t$label\t$entries\t$valid_fun\t$valid_args"
+        ;;
+        hidden)
+        ;;
+        *)
+            echo "Unknown widget_type \"$widget_type\"" >&2
+            exit 2
+        ;;
+    esac
+}
+
+function get_form_vars_not_mixedform() {
+    for var_name in "$var_path/"*.var; do
+        var_name=$(basename $var_name .var)
+        local var_form=$(get_var_form "$var_name" input !=)
+        if [ -n "$var_form" ]; then
+            echo "$var_form"
+        fi
+    done
+}
+
+function get_form_vars_mixedform() {
+    for var_name in "$var_path/"*.var; do
+        var_name=$(basename $var_name .var)
+        local var_form=$(get_var_form "$var_name" input =)
+        if [ -n "$var_form" ]; then
+            echo "$var_form"
+        fi
+    done
+}
+
+function get_var_value() {
+    echo "$1" | sed "s/'/'\"'\"'/"
+    # | sed 's/\$/\\$/' | sed 's/;/\\;/' | sed 's/\$/\\\$/'
+}
+
+function get_form_vars_mixedform_sorted() {
+    local sorted_vars="$1"
+    local y=1
+
+    #echo -n $(echo "$sorted_vars" | wc -l)
+    echo -n 0
+    local fx=$(echo "$sorted_vars" | cut -f 3 | wc -L)
+    fx=$((fx + 2))
+    echo "$sorted_vars" | while read read_line; do
+        local var_name=$(echo "$read_line" | cut -f 2)
+        local label=$(echo "$read_line" | cut -f 3)
+        local flen=$(echo "$read_line" | cut -f 4)
+        local ilen=$(echo "$read_line" | cut -f 5)
+        local itype=$(echo "$read_line" | cut -f 6)
+        echo -en " '$label' $y 1 '$(get_var_value "$(cat "$var_path/$var_name.var")")' $y $fx $flen $ilen $itype"
+        y=$((y + 1))
+    done
+}
+
+function display_mixedform() {
+    local sorted_vars=$(get_form_vars_mixedform | sort -n)
+    local form_vars=$(get_form_vars_mixedform_sorted "$sorted_vars")
+
+    set +e
+    exec 3>&1
+    exec 4>&1
+    selection=$(bash <<EOF 2>&1 1>&3
+exec 3>&1
+selection=\$(dialog \
+        --backtitle "$backtitle" \
+        --title "Edit Certificate Information" \
+        --keep-tite \
+        --insecure \
+        --ok-label "Save" \
+        --cancel-label "Cancel" \
+        --mixedform "Edit server certificate information." \
+            0 0 $form_vars \
+        2>&1 1>&3)
+exit_status=\$?
+exec 3>&-
+if [ \$exit_status -ne 0 ]; then
+    exit \$exit_status
+fi
+echo "\$selection" >&2
+EOF
+)
+    exit_status=$?
+    exec 3>&-
+    exec 4>&-
+    set -e
+
+    if [ $exit_status -eq $DIALOG_CANCEL ]; then
+        return 0
+    elif [ $exit_status -eq $DIALOG_ESC ]; then
+        exit
+    elif [ $exit_status -ne 0 ]; then
+        exit 2
+    fi
+
+    local var_line=1
+    echo "$sorted_vars" | while read mixedform; do
+        local var_name=$(echo "$mixedform" | cut -f 2)
+        local valid_fun=$(echo "$mixedform" | cut -f 7)
+        local var_value_old="$(cat "$var_path/$var_name.var")"
+        local var_value_new="$(echo "$selection" | sed $var_line'!d')"
+        if [ "$var_value_old" != "$var_value_new" ]; then
+            if [ -n "$valid_fun" ]; then
+                local valid_fun_args=$(echo "$mixedform" | cut -f 8)
+                local var_label=$(echo "$mixedform" | cut -f 3)
+                while true; do
+                    error_msg=$("$valid_fun" "$var_value_new" "$valid_fun_args")
+                    if [ -n "$error_msg" ]; then
+                        set +e
+                        exec 3>&1
+                        selection=$(dialog \
+                                --backtitle "$backtitle" \
+                                --title "Correct Error in $var_label" \
+                                --keep-tite \
+                                --insecure \
+                                --ok-label "Save" \
+                                --cancel-label "Cancel" \
+                                --inputbox "$error_msg" \
+                                    0 0 "$var_value_new" \
+                                2>&1 1>&3)
+                        exit_status=$?
+                        exec 3>&-
+                        set -e
+                        if [ $exit_status -eq $DIALOG_CANCEL ]; then
+                            continue
+                        elif [ $exit_status -eq $DIALOG_ESC ]; then
+                            exit
+                        elif [ $exit_status -ne 0 ]; then
+                            exit 2
+                        fi
+                        var_value_new=$selection
+                        continue
+                    fi
+                    break
+                done
+            fi
+            echo "$var_value_new" > "$var_path/$var_name.var"
+        fi
+        var_line=$((var_line + 1))
+    done
+}
+
+function get_form_entries_radiolist() {
+    local radiolist_var="$1"
+
+    local var_name="$(echo "$radiolist_var" | cut -f 2)"
+    local var_entries=$(echo "$radiolist_var" | cut -f 4)
+    local var_value_old="$(cat "$var_path/$var_name.var")"
+
+    echo -en 0
+
+    echo "$var_entries" | tr ':' '\n' | while read value_entry; do
+        local tag=$(echo "$value_entry" | cut -d '=' -f 1)
+        local item=$(echo "$value_entry" | cut -d '=' -f 2)
+        local status=off
+        if [ "$var_value_old" == "$tag" ]; then
+            status=on
+        fi
+        echo -en " '$tag' '$item' $status"
+    done
+    if ! grep -q "^${var_value_old}=" <(echo "$var_entries" | tr ':' '\n'); then
+        if [ -n "$var_value_old" ]; then
+            item="description unavailable"
+        else
+            item="blank"
+        fi
+        echo -en " '$var_value_old' '$item' on"
+    fi
+}
+
+function display_radiolist() {
+    local radiolist_var=$1
+    local form_entries=$(get_form_entries_radiolist "$radiolist_var")
+    local var_label=$(echo "$radiolist_var" | cut -f 3)
+
+    while true; do
+        set +e
+        exec 3>&1
+        exec 4>&1
+        selection=$(bash <<EOF 2>&1 1>&3
+exec 3>&1
+selection=\$(dialog \
+        --backtitle "$backtitle" \
+        --title "Edit $var_label" \
+        --keep-tite \
+        --ok-label "Save" \
+        --cancel-label "Cancel" \
+        --radiolist "Select an option for ${var_label}." \
+            0 0 $form_entries \
+        2>&1 1>&3)
+exit_status=\$?
+exec 3>&-
+if [ \$exit_status -ne 0 ]; then
+    exit \$exit_status
+fi
+echo "\$selection" >&2
+EOF
+)
+        exit_status=$?
+        exec 3>&-
+        exec 4>&-
+        set -e
+
+        if [ $exit_status -eq $DIALOG_CANCEL ]; then
+            return 0
+        elif [ $exit_status -eq $DIALOG_ESC ]; then
+            exit 1
+        elif [ $exit_status -ne 0 ]; then
+            exit 2
+        fi
+
+        local var_name=$(echo "$radiolist_var" | cut -f 2)
+        local valid_fun=$(echo "$radiolist_var" | cut -f 5)
+        local var_value_old="$(cat "$var_path/$var_name.var")"
+        local var_value_new="$selection"
+        if [ "$var_value_old" != "$var_value_new" ]; then
+            if [ -n "$valid_fun" ]; then
+                local valid_fun_args=$(echo "$radiolist_var" | cut -f 6)
+                error_msg=$("$valid_fun" "$var_value_new" "$valid_fun_args")
+                if [ -n "$error_msg" ]; then
+                    set +e
+                    exec 3>&1
+                    selection=$(dialog \
+                            --backtitle "$backtitle" \
+                            --title "Correct Error in $var_label" \
+                            --keep-tite \
+                            --msgbox "$error_msg" \
+                                0 0 \
+                            2>&1 1>&3)
+                    exit_status=$?
+                    exec 3>&-
+                    set -e
+                    if [ $exit_status -eq $DIALOG_CANCEL ]; then
+                        continue
+                    elif [ $exit_status -eq $DIALOG_ESC ]; then
+                        exit
+                    elif [ $exit_status -ne 0 ]; then
+                        exit 2
+                    fi
+                    continue
+                fi
+            fi
+            echo "$var_value_new" > "$var_path/$var_name.var"
+        fi
+        break
+    done
+}
+
+function display_radiolists() {
+    local sorted_vars=$(get_form_vars_not_mixedform | sort -n)
+
+    echo "$sorted_vars" | while read sorted_var; do
+        display_radiolist "$sorted_var"
+    done
+}
+
+display_radiolists || exit 0
+display_mixedform

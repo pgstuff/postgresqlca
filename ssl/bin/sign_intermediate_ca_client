@@ -1,0 +1,20 @@
+#! /bin/bash
+
+set -eu -o pipefail
+
+script_dir="$(dirname "$(readlink -f "$0")")"
+base_dir="$(dirname "$script_dir")"
+source "$base_dir/var/paths.sh"
+
+function sign_intermediate_ca() {
+    local root_ca_path=$1
+    local intermediate_ca_path=$2
+    local root_pass=$3
+
+    exec 3<<<"$root_pass"
+    "$root_ca_path/bin/sign_intermediate_ca" "$intermediate_ca_path"
+}
+
+ca_client_root_pass=$(openssl aes-256-cbc -salt -a -d -k $(cat "$ssl_key_pass_path") -in "$ca_client_root_pass_path")
+
+sign_intermediate_ca "$ca_client_root_dir" "$ca_client_intermediate_dir" "$ca_client_root_pass"

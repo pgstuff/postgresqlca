@@ -1,0 +1,41 @@
+#! /bin/bash
+
+set -eu -o pipefail
+
+script_dir="$(dirname "$(readlink -f "$0")")"
+base_dir="$(dirname "$script_dir")"
+
+server_host_name="$1"
+
+function load_vars() {
+    local var_path="$base_dir/var"
+
+    country_code="$(cat "$var_path/server_country_code.var")"
+    state_or_province_name="$(cat "$var_path/server_state_or_province_name.var")"
+    locality_name="$(cat "$var_path/server_locality_name.var")"
+    organization_name="$(cat "$var_path/server_organization_name.var")"
+    organizational_unit_name="$(cat "$var_path/server_organizational_unit_name.var")"
+    message_digest="$(cat "$var_path/server_message_digest.var")"
+}
+
+if [ -e "$base_dir/openssl/csr/$server_host_name.csr.pem" ]; then
+    echo "The request (\"$base_dir/openssl/csr/$server_host_name.csr.pem\") exists." >&2
+    exit 2
+fi
+
+load_vars
+
+"$base_dir/bin/openssl_gen_cnf"
+
+if [ -n "$message_digest" ]; then
+    message_digest_opt=-$message_digest
+else
+    message_digest_opt=
+fi
+
+openssl req -config "$base_dir/tmp/openssl.cnf" \
+    -key "$base_dir/openssl/private/$server_host_name.key.pem" \
+    -new $message_digest_opt \
+    -passin fd:3 \
+    -subj "/C=$country_code/ST=$state_or_province_name/L=$locality_name/O=$organization_name/CN=$server_host_name" \
+    -out "$base_dir/openssl/csr/$server_host_name.csr.pem"

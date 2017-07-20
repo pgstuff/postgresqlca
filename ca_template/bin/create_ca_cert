@@ -1,0 +1,70 @@
+#! /bin/bash
+
+set -eu -o pipefail
+
+script_dir="$(dirname "$(readlink -f "$0")")"
+base_dir="$(dirname "$script_dir")"
+
+function load_vars() {
+    local var_path="$base_dir/var"
+
+    country_code="$(cat "$var_path/ca_country_code.var")"
+    state_or_province_name="$(cat "$var_path/ca_state_or_province_name.var")"
+    locality_name="$(cat "$var_path/ca_locality_name.var")"
+    organization_name="$(cat "$var_path/ca_organization_name.var")"
+    organizational_unit_name="$(cat "$var_path/ca_organizational_unit_name.var")"
+    ca_chain="$(cat "$var_path/ca_chain.var")"
+    common_name="$(cat "$var_path/${ca_chain}_common_name.var")"
+    if [ "$ca_chain" == "root" ]; then
+        root_cert_days="$(cat "$var_path/root_cert_days.var")"
+    fi
+    message_digest="$(cat "$var_path/ca_message_digest.var")"
+}
+
+load_vars
+
+case "$ca_chain" in
+    root)
+        if [ -e "$base_dir/openssl/certs/ca.cert.pem" ]; then
+            echo "The CA cert (\"$base_dir/openssl/certs/ca.cert.pem\") exists." >&2
+            exit 2
+        fi
+    ;;
+    intermediate)
+        if [ -e "$base_dir/openssl/csr/ca.csr.pem" ]; then
+            echo "The CA request (\"$base_dir/openssl/csr/ca.csr.pem\") exists." >&2
+            exit 2
+        fi
+    ;;
+    *)
+        echo "The ca_chain (\"$ca_chain\") var is invalid." >&2
+        exit 2
+    ;;
+esac
+
+"$base_dir/bin/openssl_gen_cnf"
+
+case "$ca_chain" in
+    root)
+        openssl req -config "$base_dir/tmp/openssl.cnf" \
+            -key "$base_dir/openssl/private/ca.key.pem" \
+            -new -x509 -days $root_cert_days -"$message_digest" -extensions v3_ca \
+            -passin fd:3 \
+            -subj "/C=$country_code/ST=$state_or_province_name/L=$locality_name/O=$organization_name/CN=$common_name" \
+            -out "$base_dir/openssl/certs/ca.cert.pem"
+        chmod 644 "$base_dir/openssl/certs/ca.cert.pem"
+        #openssl x509 -noout -text -in "$base_dir/openssl/certs/ca.cert.pem"
+    ;;
+    intermediate)
+        openssl req -config "$base_dir/tmp/openssl.cnf" \
+            -new -"$message_digest" \
+            -key "$base_dir/openssl/private/ca.key.pem" \
+            -passin fd:3 \
+            -subj "/C=$country_code/ST=$state_or_province_name/L=$locality_name/O=$organization_name/CN=$common_name" \
+            -out "$base_dir/openssl/csr/ca.csr.pem"
+    ;;
+    *)
+        echo "The ca_chain (\"$ca_chain\") var is invalid." >&2
+        exit 2
+    ;;
+esac

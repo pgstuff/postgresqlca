@@ -1,0 +1,41 @@
+#! /bin/bash
+
+set -eu -o pipefail
+
+script_dir="$(dirname "$(readlink -f "$0")")"
+base_dir="$(dirname "$script_dir")"
+
+intermediate_ca_path=$1
+
+function load_vars() {
+    local var_path="$base_dir/var"
+
+    cert_days="$(cat "$var_path/intermediate_cert_days.var")"
+    message_digest="$(cat "$var_path/ca_message_digest.var")"
+}
+
+if [ -e "$intermediate_ca_path/openssl/certs/ca.cert.pem" ]; then
+    echo "The CA cert (\"$intermediate_ca_path/openssl/certs/ca.cert.pem\") exists." >&2
+    exit 2
+fi
+
+load_vars
+
+"$base_dir/bin/openssl_gen_cnf"
+
+openssl ca -config "$base_dir/tmp/openssl.cnf" -extensions v3_intermediate_ca \
+    -days "$cert_days" -notext -md "$message_digest" \
+    -passin fd:3 -batch \
+    -in "$intermediate_ca_path/openssl/csr/ca.csr.pem" \
+    -out "$intermediate_ca_path/openssl/certs/ca.cert.pem"
+
+chmod 644 "$intermediate_ca_path/openssl/certs/ca.cert.pem"
+
+#openssl x509 -noout -text -in "$intermediate_ca_path/openssl/certs/ca.cert.pem"
+
+openssl verify -CAfile "$base_dir/openssl/certs/ca.cert.pem" "$intermediate_ca_path/openssl/certs/ca.cert.pem"
+
+cat "$intermediate_ca_path/openssl/certs/ca.cert.pem" \
+      "$base_dir/openssl/certs/ca.cert.pem" > "$intermediate_ca_path/openssl/certs/ca-chain.cert.pem"
+
+chmod 644 "$intermediate_ca_path/openssl/certs/ca-chain.cert.pem"

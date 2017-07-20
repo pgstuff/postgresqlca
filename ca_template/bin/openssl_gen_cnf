@@ -1,0 +1,147 @@
+#! /bin/bash
+
+set -eu -o pipefail
+script_dir="$(dirname "$(readlink -f "$0")")"
+base_dir="$(dirname "$script_dir")"
+
+function load_vars() {
+    local var_path="$base_dir/var"
+
+    country_code="$(cat "$var_path/ca_country_code.var")"
+    state_or_province_name="$(cat "$var_path/ca_state_or_province_name.var")"
+    locality_name="$(cat "$var_path/ca_locality_name.var")"
+    organization_name="$(cat "$var_path/ca_organization_name.var")"
+    organizational_unit_name="$(cat "$var_path/ca_organizational_unit_name.var")"
+    ca_chain="$(cat "$var_path/ca_chain.var")"
+    common_name="$(cat "$var_path/${ca_chain}_common_name.var")"
+    crl_days="$(cat "$var_path/${ca_chain}_crl_days.var")"
+}
+
+function create_openssl_cnf() {
+    cat > "$base_dir/tmp/openssl.cnf" <<EOF
+[ ca ]
+default_ca = CA_default
+
+[ CA_default ]
+dir               = $base_dir/openssl
+certs             = \$dir/certs
+crl_dir           = \$dir/crl
+new_certs_dir     = \$dir/newcerts
+database          = \$dir/index.txt
+serial            = \$dir/serial
+RANDFILE          = \$dir/private/.rand
+
+private_key       = \$dir/private/ca.key.pem
+certificate       = \$dir/certs/ca.cert.pem
+
+crlnumber         = \$dir/crlnumber
+crl               = \$dir/crl/ca.crl.pem
+crl_extensions    = crl_ext
+default_crl_days  = $crl_days
+
+default_md        = sha256
+
+name_opt          = ca_default
+cert_opt          = ca_default
+default_days      = 375
+preserve          = no
+EOF
+
+    case "$ca_chain" in
+        root)
+            cat >> "$base_dir/tmp/openssl.cnf" <<EOF
+policy            = policy_strict
+
+[ policy_strict ]
+countryName             = match
+stateOrProvinceName     = match
+organizationName        = match
+organizationalUnitName  = optional
+commonName              = supplied
+emailAddress            = optional
+EOF
+        ;;
+        intermediate)
+            cat >> "$base_dir/tmp/openssl.cnf" <<EOF
+policy            = policy_loose
+
+[ policy_loose ]
+countryName             = optional
+stateOrProvinceName     = optional
+localityName            = optional
+organizationName        = optional
+organizationalUnitName  = optional
+commonName              = supplied
+emailAddress            = optional
+EOF
+        ;;
+        *)
+            echo "The ca_chain (\"$ca_chain\") var is invalid." >&2
+            exit 2
+        ;;
+    esac
+
+    cat >> "$base_dir/tmp/openssl.cnf" <<EOF
+
+[ req ]
+default_bits        = 2048
+distinguished_name  = req_distinguished_name
+string_mask         = utf8only
+
+default_md          = sha256
+
+x509_extensions     = v3_ca
+
+[ req_distinguished_name ]
+countryName                     = Country Name (2 letter code)
+stateOrProvinceName             = State or Province Name
+localityName                    = Locality Name
+0.organizationName              = Organization Name
+organizationalUnitName          = Organizational Unit Name
+commonName                      = Common Name
+emailAddress                    = Email Address
+
+countryName_default             = $country_code
+stateOrProvinceName_default     = $state_or_province_name
+localityName_default            = $locality_name
+0.organizationName_default      = $organization_name
+organizationalUnitName_default  = $organizational_unit_name
+#emailAddress_default           =
+
+[ v3_ca ]
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+basicConstraints = critical, CA:true
+keyUsage = critical, digitalSignature, cRLSign, keyCertSign
+
+[ v3_intermediate_ca ]
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+basicConstraints = critical, CA:true, pathlen:0
+keyUsage = critical, digitalSignature, cRLSign, keyCertSign
+
+[ client_cert ]
+basicConstraints = CA:FALSE
+nsCertType = client, email
+nsComment = "PostgreSQL Client Certificate"
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer
+keyUsage = critical, nonRepudiation, digitalSignature, keyEncipherment
+extendedKeyUsage = clientAuth, emailProtection
+
+[ server_cert ]
+basicConstraints = CA:FALSE
+nsCertType = server
+nsComment = "PostgreSQL Server Certificate"
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer:always
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+
+[ crl_ext ]
+authorityKeyIdentifier=keyid:always
+EOF
+}
+
+load_vars
+create_openssl_cnf

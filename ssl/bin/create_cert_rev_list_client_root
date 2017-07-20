@@ -1,0 +1,19 @@
+#! /bin/bash
+
+set -eu -o pipefail
+
+script_dir="$(dirname "$(readlink -f "$0")")"
+base_dir="$(dirname "$script_dir")"
+source "$base_dir/var/paths.sh"
+
+function create_cert_rev_list() {
+    local ca_path=$1
+    local pass=$2
+
+    exec 3<<<"$pass"
+    "$ca_path/bin/create_cert_rev_list"
+}
+
+ca_client_root_pass=$(openssl aes-256-cbc -salt -a -d -k $(cat "$ssl_key_pass_path") -in "$ca_client_root_pass_path")
+
+create_cert_rev_list "$ca_client_root_dir" "$ca_client_root_pass"

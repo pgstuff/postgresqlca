@@ -1,0 +1,52 @@
+#! /bin/bash
+
+set -eu -o pipefail
+
+script_dir="$(dirname "$(readlink -f "$0")")"
+base_dir="$(dirname "$script_dir")"
+source "$base_dir/var/paths.sh"
+
+if [ -e "$ca_client_root_dir" ]; then
+    echo "The CA client root (\"${ca_client_root_dir}\") exists." >&2
+    exit 2
+fi
+
+function install_root() {
+    local ca_path=$1
+
+    cp -r "$ca_template_dir" "$ca_path"
+    chmod 700 "$ca_path/openssl/private"
+    rmdir "$ca_path/openssl/csr"
+
+    echo "root" > "$ca_path/var/ca_chain.var"
+    echo "client" > "$ca_path/var/ca_usage.var"
+    rm "$ca_path/var/intermediate_crl_days.var"
+    rm "$ca_path/var/intermediate_common_name.var"
+    rm "$ca_path/var/server_"*".var"
+    rm "$ca_path/var/client_"*".var"
+}
+
+function create_root() {
+    local ca_path=$1
+    local ca_pass=$2
+
+    exec 3<<<"$ca_pass"
+    "$ca_path/bin/create_ca_key"
+
+    exec 3<<<"$ca_pass"
+    "$ca_path/bin/create_ca_cert"
+}
+
+if [ -z "${client_root_pass-}" ]; then
+    ca_client_root_pass=$(mkpasswd -l 32 -d 4 -c 4 -C 4 -s 4)
+    echo "$ca_client_root_pass" | openssl aes-256-cbc -salt -a -e -k $(cat "$ssl_key_pass_path") -out "$ca_client_root_pass_path"
+fi
+
+install_root "$ca_client_root_dir"
+if [ "${install_edit_vars-0}" -eq 1 ]; then
+    "$ca_client_root_dir/bin/edit_vars"
+fi
+create_root "$ca_client_root_dir" "$ca_client_root_pass"
+
+rm "$ca_client_root_dir/bin/"*_server_*
+rm "$ca_client_root_dir/bin/"*_client_*
