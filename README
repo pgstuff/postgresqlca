@@ -16,7 +16,7 @@ Follow the on screen instructions for editing $PGDATA/pg_hba.conf
 
 For PostgreSQL 9.x, restart the server.  For PostgreSQL 10 and above, use reload instead.
 
-A group called sslcertusers is created to route certificate users to the proper line in pg_hba.conf.  Users will use that rule exclusively when they have any unrevoked certificates.  If all certificates are revoked for a user, then a later HBA rule must match in order for the user to log in with an alternative method.  If there are no other matching HBA rules, then access will be denied.  This will have an immediate effect, unlike the CRL, which must be reloaded.
+A group called ssl_cert_users is created to route certificate users to the proper line in pg_hba.conf.  Users will use that rule exclusively when they have any unrevoked certificates.  If all certificates are revoked for a user, then a later HBA rule must match in order for the user to log in with an alternative method.  If there are no other matching HBA rules, then access will be denied.  This will have an immediate effect, unlike the CRL, which must be reloaded.
 
 To create a new certificate for an existing PostgreSQL user, as the postgres user (prefix these with "sudo -u postgres"), run:
 
