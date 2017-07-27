@@ -16,12 +16,16 @@ function install_intermediate() {
 
     cp -r "$ca_template_dir" "$ca_path"
     chmod 700 "$ca_path/openssl/private"
-    rm "$ca_path/var/root_common_name.var"
-    rm "$ca_path/var/root_cert_days.var"
-    rm "$ca_path/var/root_crl_days.var"
-    rm "$ca_path/var/intermediate_cert_days.var"
-    rm "$ca_path/var/server_"*".var"
-
+    rm \
+        "$ca_path/var/root_common_name.var" \
+        "$ca_path/var/root_cert_days.var" \
+        "$ca_path/var/root_crl_days.var" \
+        "$ca_path/var/intermediate_cert_days.var" \
+        "$ca_path/var/server_"*".var"
+    chmod a-w \
+        "$ca_path/var/ca_country_code.var" \
+        "$ca_path/var/ca_state_or_province_name.var" \
+        "$ca_path/var/ca_organization_name.var"
     echo "intermediate" > "$ca_path/var/ca_chain.var"
     echo "client" > "$ca_path/var/ca_usage.var"
 }
@@ -39,8 +43,8 @@ function create_intermediate() {
 
 if [ -z "${client_intermediate_pass-}" ]; then
     ca_client_intermediate_pass=$(mkpasswd -l 32 -d 4 -c 4 -C 4 -s 4)
-    echo "$ca_client_intermediate_pass" | openssl aes-256-cbc -salt -a -e -k $(cat "$ssl_key_pass_path") -out "$ca_client_intermediate_pass_path"
 fi
+echo "$ca_client_intermediate_pass" | openssl aes-256-cbc -salt -a -e -k $(cat "$ssl_key_pass_path") -out "$ca_client_intermediate_pass_path"
 
 install_intermediate "$ca_client_intermediate_dir"
 if [ "${install_edit_vars-0}" -eq 1 ]; then
@@ -48,5 +52,5 @@ if [ "${install_edit_vars-0}" -eq 1 ]; then
 fi
 create_intermediate "$ca_client_intermediate_dir" "$ca_client_intermediate_pass"
 
-rm "$ca_client_intermediate_dir/bin/"*_server_*
+rm "$ca_client_intermediate_dir/bin/"*_server
 rm "$ca_client_intermediate_dir/bin/sign_intermediate_ca"

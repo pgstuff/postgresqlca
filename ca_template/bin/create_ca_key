@@ -9,7 +9,7 @@ function load_vars() {
     local var_path="$base_dir/var"
 
     key_len="$(cat "$var_path/ca_key_len.var")"
-    cipher="$(cat "$var_path/ca_cipher.var")"
+    key_cipher="$(cat "$var_path/ca_key_cipher.var")"
 }
 
 if [ -e "$base_dir/openssl/private/ca.key.pem" ]; then
@@ -19,7 +19,7 @@ fi
 
 load_vars
 
-openssl genrsa -"$cipher" -passout fd:3 \
+openssl genrsa -"$key_cipher" -passout fd:3 \
     -out "$base_dir/openssl/private/ca.key.pem" "$key_len"
 
 chmod 600 "$base_dir/openssl/private/ca.key.pem"

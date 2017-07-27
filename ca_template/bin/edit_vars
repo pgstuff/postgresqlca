@@ -43,6 +43,10 @@ if [ -e "$var_path/ca_usage.var" ]; then
     esac
 fi
 
+function grep_quote() {
+    echo "$1" | sed 's/\\/\\\\/g' | sed 's/\[/\\\[/g' | sed 's/\]/\\\]/g' | sed 's/\^/\\^/g' | sed 's/\$/\\$/g' | sed 's/\*/\\*/g' | sed 's/\./\\./g'
+}
+
 function valid_key_len() {
     if [[ ! $1 =~ ^[0-9]+$ ]]; then
         echo "A key length must be a positive whole number."
@@ -63,6 +67,16 @@ function valid_cert_days() {
     fi
 }
 
+function valid_ip_port() {
+    if [[ ! $1 =~ ^[0-9]+$ ]]; then
+        echo "A port number must be a positive whole number."
+    elif [ $1 -lt 1 ]; then
+        echo "A port number must be no smaller than 1."
+    elif [ $1 -gt 65535 ]; then
+        echo "A port number must be no larger than 65535"
+    fi
+}
+
 function get_var_form() {
     local var_name=$1
     local selected_widget_type=$2
@@ -71,6 +85,7 @@ function get_var_form() {
     local order=10
     local label=$1
     local entries=
+    local text=
     local flen=35
     local ilen=64
     local itype=0
@@ -78,178 +93,205 @@ function get_var_form() {
     local valid_args=
 
     case $var_name in
-        ca_cipher)
+        ca_key_cipher)
             label="CA Cipher"
-            order=1
+            order=10
             widget_type=radiolist
             entries="aes256=AES 256"
         ;;
         ca_key_len)
             label="CA Key Len"
-            order=2
+            order=11
             flen=5
             ilen=4
             valid_fun=valid_key_len
         ;;
         ca_message_digest)
             label="CA Message Digest"
-            order=3
+            order=12
             widget_type=radiolist
             entries="sha256=Secure Hash Algorithm 2 - SHA-256:sha384=Secure Hash Algorithm 2 - SHA-384:sha512=Secure Hash Algorithm 2 - SHA-512"
         ;;
         ca_country_code)
             label="CA ISO 3166 Country Code"
-            order=4
+            order=20
             flen=3
             ilen=2
         ;;
         ca_state_or_province_name)
             label="CA State or Province Name"
-            order=5
+            order=21
         ;;
         ca_locality_name)
             label="CA Locality Name"
-            order=6
+            order=22
         ;;
         ca_organization_name)
             label="CA Organization Name"
-            order=7
+            order=23
         ;;
         ca_organizational_unit_name)
             label="CA Organizational Unit Name"
-            order=8
+            order=24
         ;;
         root_common_name)
             label="Root Common Name"
-            order=9
+            order=30
         ;;
         root_cert_days)
             label="Root Cert Validity in Days"
-            order=10
+            order=31
             flen=6
             ilen=5
             valid_fun=valid_cert_days
         ;;
         root_crl_days)
             label="Root CRL Validity in Days"
-            order=11
+            order=32
             flen=6
             ilen=5
             valid_fun=valid_cert_days
         ;;
         intermediate_common_name)
             label="Intermediate Common Name"
-            order=12
+            order=40
+        ;;
+        intermediate_ca_id)
+            label="Intermediate CA ID"
+            order=41
         ;;
         intermediate_cert_days)
             label="Intermediate Cert Validity in Days"
-            order=13
+            order=42
             flen=6
             ilen=5
             valid_fun=valid_cert_days
         ;;
         intermediate_crl_days)
             label="Intermediate CRL Validity in Days"
-            order=14
+            order=43
             flen=6
             ilen=5
             valid_fun=valid_cert_days
         ;;
-        server_cipher)
-            label="Server Cipher"
-            order=15
+        server_key_cipher)
+            label="Server Key Cipher"
+            order=50
             widget_type=radiolist
-            entries="aes256=AES 256"
+            entries="=No Cipher:aes256=AES 256"
+            text="Select an option for Server Key Cipher.  If you select a cipher, you will be required to enter a pass phrase when you start or restart PostgreSQL."
         ;;
         server_key_len)
             label="Server Key Len"
-            order=16
+            order=51
             flen=5
             ilen=4
             valid_fun=valid_key_len
         ;;
         server_message_digest)
             label="Server Message Digest"
-            order=17
+            order=52
             widget_type=radiolist
             entries="sha256=Secure Hash Algorithm 2 - SHA-256:sha384=Secure Hash Algorithm 2 - SHA-384:sha512=Secure Hash Algorithm 2 - SHA-512"
         ;;
         server_country_code)
             label="Server ISO 3166 Country Code"
-            order=18
+            order=60
             flen=3
             ilen=2
         ;;
         server_state_or_province_name)
             label="Server State or Province Name"
-            order=19
+            order=61
         ;;
         server_locality_name)
             label="Server Locality Name"
-            order=20
+            order=62
         ;;
         server_organization_name)
             label="Server Organization Name"
-            order=21
+            order=63
         ;;
         server_organizational_unit_name)
             label="Server Organizational Unit Name"
-            order=22
+            order=64
         ;;
         server_cert_days)
             label="Server Cert Validity in Days"
-            order=23
+            order=70
             flen=6
             ilen=5
             valid_fun=valid_cert_days
         ;;
-        client_cipher)
-            label="Client Cipher"
-            order=24
+        server_cert_users_group_name)
+            label="Server Certificate Users Group Name"
+            order=75
+        ;;
+        client_key_cipher)
+            label="Client Key Cipher"
+            order=80
             widget_type=radiolist
-            entries="aes256=AES 256"
+            entries="=No Cipher:aes256=AES 256"
+            text="Select an option for Client Key Cipher.  If you select a cipher, you will be required to enter a pass phrase for the client key when you connect to PostgreSQL."
         ;;
         client_key_len)
             label="Client Key Len"
-            order=25
+            order=81
             flen=5
             ilen=4
             valid_fun=valid_key_len
         ;;
         client_message_digest)
             label="Client Message Digest"
-            order=26
+            order=82
             widget_type=radiolist
             entries="sha256=Secure Hash Algorithm 2 - SHA-256:sha384=Secure Hash Algorithm 2 - SHA-384:sha512=Secure Hash Algorithm 2 - SHA-512"
         ;;
         client_country_code)
             label="Client ISO 3166 Country Code"
-            order=27
+            order=90
             flen=3
             ilen=2
         ;;
         client_state_or_province_name)
             label="Client State or Province Name"
-            order=28
+            order=91
         ;;
         client_locality_name)
             label="Client Locality Name"
-            order=29
+            order=92
         ;;
         client_organization_name)
             label="Client Organization Name"
-            order=30
+            order=93
         ;;
         client_organizational_unit_name)
             label="Client Organizational Unit Name"
-            order=31
+            order=94
         ;;
         client_cert_days)
             label="Client Cert Validity in Days"
-            order=32
+            order=100
             flen=6
             ilen=5
             valid_fun=valid_cert_days
+        ;;
+        client_default_ssl_mode)
+            label="Default Client SSL Mode"
+            order=110
+            widget_type=radiolist
+            entries="disable=No encryption:allow=No encryption unless the server requires it:prefer=Use encryption if the server supports it:require=Eavesdropping protection in trusted (local) networks only:verify-ca=Full eavesdropping and MITM protection to any trusted server:verify-full=Full eavesdropping and MITM protection to the specified host name"
+        ;;
+        client_default_port)
+            label="Default Port"
+            order=111
+            flen=6
+            ilen=5
+            valid_fun=valid_ip_port
+        ;;
+        client_default_database_name)
+            label="Default Database Name"
+            order=112
         ;;
         ca_chain)
             widget_type=hidden
@@ -285,7 +327,10 @@ function get_var_form() {
             echo -e "$order\t$var_name\t$label\t$flen\t$ilen\t$itype\t$valid_fun\t$valid_args"
         ;;
         radiolist)
-            echo -e "$order\t$var_name\t$label\t$entries\t$valid_fun\t$valid_args"
+            if [ -z "$text" ]; then
+                text="Select an option for ${label}."
+            fi
+            echo -e "$order\t$var_name\t$label\t$entries\t$text\t$valid_fun\t$valid_args"
         ;;
         hidden)
         ;;
@@ -316,9 +361,8 @@ function get_form_vars_mixedform() {
     done
 }
 
-function get_var_value() {
+function quote_single_quotes() {
     echo "$1" | sed "s/'/'\"'\"'/"
-    # | sed 's/\$/\\$/' | sed 's/;/\\;/' | sed 's/\$/\\\$/'
 }
 
 function get_form_vars_mixedform_sorted() {
@@ -335,7 +379,7 @@ function get_form_vars_mixedform_sorted() {
         local flen=$(echo "$read_line" | cut -f 4)
         local ilen=$(echo "$read_line" | cut -f 5)
         local itype=$(echo "$read_line" | cut -f 6)
-        echo -en " '$label' $y 1 '$(get_var_value "$(cat "$var_path/$var_name.var")")' $y $fx $flen $ilen $itype"
+        echo -en " '$label' $y 1 '$(quote_single_quotes "$(cat "$var_path/$var_name.var")")' $y $fx $flen $ilen $itype"
         y=$((y + 1))
     done
 }
@@ -348,11 +392,12 @@ function display_mixedform() {
     exec 3>&1
     exec 4>&1
     selection=$(bash <<EOF 2>&1 1>&3
+set -u
 exec 3>&1
 selection=\$(dialog \
         --backtitle "$backtitle" \
         --title "Edit Certificate Information" \
-        --keep-tite \
+        --keep-tite --input-fd 3 \
         --insecure \
         --ok-label "Save" \
         --cancel-label "Cancel" \
@@ -398,7 +443,7 @@ EOF
                         selection=$(dialog \
                                 --backtitle "$backtitle" \
                                 --title "Correct Error in $var_label" \
-                                --keep-tite \
+                                --keep-tite --input-fd 3 \
                                 --insecure \
                                 --ok-label "Save" \
                                 --cancel-label "Cancel" \
@@ -445,7 +490,7 @@ function get_form_entries_radiolist() {
         fi
         echo -en " '$tag' '$item' $status"
     done
-    if ! grep -q "^${var_value_old}=" <(echo "$var_entries" | tr ':' '\n'); then
+    if ! grep -q "^$(grep_quote "${var_value_old}")=" <(echo "$var_entries" | tr ':' '\n'); then
         if [ -n "$var_value_old" ]; then
             item="description unavailable"
         else
@@ -459,20 +504,22 @@ function display_radiolist() {
     local radiolist_var=$1
     local form_entries=$(get_form_entries_radiolist "$radiolist_var")
     local var_label=$(echo "$radiolist_var" | cut -f 3)
+    local text=$(echo "$radiolist_var" | cut -f 5)
 
     while true; do
         set +e
         exec 3>&1
         exec 4>&1
         selection=$(bash <<EOF 2>&1 1>&3
+set -u
 exec 3>&1
 selection=\$(dialog \
         --backtitle "$backtitle" \
         --title "Edit $var_label" \
-        --keep-tite \
+        --keep-tite --input-fd 3 \
         --ok-label "Save" \
         --cancel-label "Cancel" \
-        --radiolist "Select an option for ${var_label}." \
+        --radiolist "${text}" \
             0 0 $form_entries \
         2>&1 1>&3)
 exit_status=\$?
@@ -497,12 +544,12 @@ EOF
         fi
 
         local var_name=$(echo "$radiolist_var" | cut -f 2)
-        local valid_fun=$(echo "$radiolist_var" | cut -f 5)
+        local valid_fun=$(echo "$radiolist_var" | cut -f 6)
         local var_value_old="$(cat "$var_path/$var_name.var")"
         local var_value_new="$selection"
         if [ "$var_value_old" != "$var_value_new" ]; then
             if [ -n "$valid_fun" ]; then
-                local valid_fun_args=$(echo "$radiolist_var" | cut -f 6)
+                local valid_fun_args=$(echo "$radiolist_var" | cut -f 7)
                 error_msg=$("$valid_fun" "$var_value_new" "$valid_fun_args")
                 if [ -n "$error_msg" ]; then
                     set +e
@@ -510,7 +557,7 @@ EOF
                     selection=$(dialog \
                             --backtitle "$backtitle" \
                             --title "Correct Error in $var_label" \
-                            --keep-tite \
+                            --keep-tite --input-fd 3 \
                             --msgbox "$error_msg" \
                                 0 0 \
                             2>&1 1>&3)

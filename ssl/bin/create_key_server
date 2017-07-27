@@ -6,15 +6,15 @@ script_dir="$(dirname "$(readlink -f "$0")")"
 base_dir="$(dirname "$script_dir")"
 source "$base_dir/var/paths.sh"
 
-function create_server_key() {
+function create_key_server() {
     local ca_path=$1
     local server_host_name=$2
     local pass=$3
 
     exec 3<<<"$pass"
-    "$ca_path/bin/create_server_key" "$server_host_name"
+    "$ca_path/bin/create_key_server" "$server_host_name"
 }
 
 server_key_pass=$(openssl aes-256-cbc -salt -a -d -k $(cat "$ssl_key_pass_path") -in "$server_key_pass_path")
 
-create_server_key "$ca_server_intermediate_dir" "$1" "$server_key_pass"
+create_key_server "$ca_server_intermediate_dir" "$1" "$server_key_pass"

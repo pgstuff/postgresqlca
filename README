@@ -1,15 +1,59 @@
+A quick and simple certificate manager for PostgreSQL servers and clients.
+
+When both server and client certificates are used on both sides, man-in-the-middle (MITM) attacks are prevented.  Servers not only verify the client, but the client also verifies that it is connecting to a trusted server.
+
 * Run on the PostgreSQL server (the following instructions assume EL 6.x - 7.x with PostgreSQL RPM 9.5 - 9.6):
 
-sudo yum install dialog openssl expect
+sudo yum install openssl expect
 
 sudo su postgres
-
+cd /tmp
+git clone https://github.com/pgstuff/postgresqlca.git
 cd postgresqlca
-
-ca_template/bin/edit_vars
-
 ./install.sh
 
 Follow the on screen instructions for editing $PGDATA/pg_hba.conf
 
-In PostgreSQL 9.x, restart the server.  In PostgreSQL 10 and above, reload.
+For PostgreSQL 9.x, restart the server.  For PostgreSQL 10 and above, use reload instead.
+
+A group called sslcertusers is created to route certificate users to the proper line in pg_hba.conf.  Users will use that rule exclusively when they have any unrevoked certificates.  If all certificates are revoked for a user, then a later HBA rule must match in order for the user to log in with an alternative method.  If there are no other matching HBA rules, then access will be denied.  This will have an immediate effect, unlike the CRL, which must be reloaded.
+
+To create a new certificate for an existing PostgreSQL user, as the postgres user (prefix these with "sudo -u postgres"), run:
+
+$PGDATA/ssl/bin/package_key_client -m USER-NAME-HERE /tmp/postgresql-key.tar.bz2
+
+Change USER-NAME-HERE to the user name.  By default, archives are encrypted to protect the private key.  Enter the password twice when prompted to.
+
+To send the key to a server via SSH, use:
+
+$PGDATA/ssl/bin/send_key_ssh_client USER-NAME-HERE localhost
+
+Change USER-NAME-HERE to the user name and change localhost to the SSH server that you are sending the key to.  Add the -m argument before the user name if you want to make a new certificate.  You may create multiple certificates per user.  You may revoke them individually if you use the CRL feature.  In the case of multiple certificates per user, individual certificates are identified by a certificate serial number.
+
+The verify-ca method will allow a client to connect to any server that this certificate authority signed.  If you create a certificate authority for each server, then this is sufficient.  If you use this certificate authority for multiple servers, and you do not fully trust one of those servers, then use verify-full.  When you use verify-full, the host name contained in the server certificate must match the host name that the client sees.  You will have to create a new server certificate if the server's host name changes.
+
+If you want to use a different user naming convention for your common names, such as an abbreviated convention for your database user names and a more complete name in the certificate's common name, then you may use pg_ident.conf to allow certificates with the longer names.  Note that pg_ident.conf does not transform the common name into the PostgreSQL user name.
+
+See the documentation on how to use regular expressions if you want to have one entry for multiple users that share a common naming convention.  A patch may be required if your expression requires more than one capture group, such as transforming first name dot last name into first initial last name.  See the ident_regex_upgrade directory for a patch and a map entry example.
+
+Optionally, add ":!SSLv2:!SSLv3:!TLSv1.0:!TLSv1.1" to disallow ciphers that work under older SSL and TLS protocols.  Note that PostgreSQL connections do not use as many TLS features as HTTPS TLS connections do.  For example, it does not support session resumption, so any session resumption vulnerability is not applicable to PostgreSQL.  In this case, PostgreSQL can safely use the older protocol.  Disabling older TLS protocols may not be necessary to protect against known vulnerabilities.  However, it may be advantageous to ensure that your clients are using the latest security technology even if there are no known usable exploits.
+
+This script will automatically set the most secure ciphers:
+sed -ri $'s/#*(ssl_ciphers).*$/\\1 = \'HIGH:!MEDIUM:!3DES:!aNULL:!SSLv3:!TLSv1\'/' "$PGDATA/postgresql.conf"
+
+Use this to to review the list of ciphers that will be allowed:
+openssl ciphers -v "$(grep 'ssl_ciphers.*=.*'"'"'.*'"'" $PGDATA/postgresql.conf | cut -f 2 -d "'")"
+
+If you do not wish to use CRL files to disallow revoked certificates, consider adding a sequence at the end of the user name, and increment the sequence for each certificate issued.  So each certificate will have a unique PostgreSQL login name and certificate common name.  Disable the accounts that do not use the latest sequence value.  If you do not want to have multiple login accounts (which is a good idea if these accounts own database objects), then use pg_ident.conf to define a map that maps only the latest sequence to the login name without a sequence.  Reference this map in the cert line in pg_hba.conf.
+
+To see all unrevoked certificates, run:
+
+$PGDATA/ssl/bin/list_certs_client
+
+To revoke a certificate, run the following, replacing SER_NUM with the certificate serial number from the command above:
+
+$PGDATA/bin/revoke_cert_client SER_NUM
+
+If the user has other active certificates, then you will need to reload PostgreSQL (or restart for PostgreSQL 9.x) to reject this certificate.  If this was their only certificate, then the certificate HBA rule will no longer match their logins.  There may be other rules in pg_hba.conf that allow the user to log in with another method.
+
+If bandwidth is more important than security, or the connection is made secure in other ways, then you can add the setting sslcompression=1 to the connection parameters and add "export OPENSSL_DEFAULT_ZLIB=true" to the environment to enable that functionality for programs that use openssl and see this environment setting.

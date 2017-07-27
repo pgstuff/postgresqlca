@@ -1,0 +1,39 @@
+#! /bin/bash
+
+set -eu -o pipefail
+
+function get_header_line() {
+    local header_name=$1
+    local file_path=$2
+    openssl asn1parse -in "$file_path" | awk '/OBJECT/ && /:'"$header_name"'/ {print NR};' | head -n 1
+}
+
+function get_asn_value_by_header_line() {
+    local header_line_number=$1
+    local file_path=$2
+    openssl asn1parse -in "$file_path" | head -n $(echo "$header_line_number" + 1 | bc) | tail -1 | cut -d : -f 4
+}
+
+function get_asn_required_value() {
+    local header_name=$1
+    local file_path=$2
+
+    local header_line_number=$(get_header_line "$header_name" "$file_path")
+
+    if [ -z "$header_line_number" ]; then
+        echo "$header_name is missing."
+        exit 2
+    fi
+
+    get_asn_value_by_header_line "$header_line_number" "$file_path"
+}
+
+field_name=$1
+file_path=$2
+
+if [ "$field_name" == "serialNumber" ]; then
+    openssl asn1parse -in "$file_path" | grep INTEGER | sed '2q;d' | cut -d : -f 4
+    exit
+fi
+
+get_asn_required_value "$field_name" "$file_path"

@@ -1,0 +1,165 @@
+#! /bin/bash
+
+set -eu -o pipefail
+
+script_dir="$(dirname "$(readlink -f "$0")")"
+base_dir="$(dirname "$script_dir")"
+source "$base_dir/var/paths.sh"
+
+tmp_dir=${tmp_dir-/dev/shm}
+pg_config_dir=${PGDATA-}
+archive_format=zip
+compression=bzip2
+encryption=aes256
+postgresql_host_name=
+ca_id="$(cat "$ca_server_intermediate_dir/var/intermediate_ca_id.var")"
+client_ssl_mode="$(cat "$ca_client_intermediate_dir/var/client_default_ssl_mode.var")"
+postgresql_port="$(cat "$ca_client_intermediate_dir/var/client_default_port.var")"
+database_name="$(cat "$ca_client_intermediate_dir/var/client_default_database_name.var")"
+make_key=0
+ssh_options=
+
+parsed_args=$(getopt -o "a:c:d:e:i:ms:o:" -l "archiveformat:,compression:,datadirectory:,encryption:,caid:,makekey,servername:,sshoption:" -n "$(basename $0)" -- "$@")
+eval set -- "$parsed_args"
+while [[ $# -gt 1 ]]; do
+    case "$1" in
+        -a|--archiveformat)
+            archive_format=$2
+            shift
+        ;;
+        -c|--compression)
+            compression=$2
+            shift
+        ;;
+        -d|--datadirectory)
+            pg_config_dir=$2
+            shift
+        ;;
+        -e|--encryption)
+            encryption=$2
+            shift
+        ;;
+        -i|--caid)
+            ca_id=$2
+            shift
+        ;;
+        -m|--makekey)
+            make_key=1
+        ;;
+        -s|--servername)
+            postgresql_host_name=$2
+            shift
+        ;;
+        --)
+            break
+        ;;
+        *)
+            exit 2
+        ;;
+    esac
+    shift
+done
+shift
+
+key_name=$1
+email_address=$2
+
+if [ -z "$key_name" ]; then
+    echo "Specify a user name" >&2
+    exit 2
+fi
+
+if [ -z "$email_address" ]; then
+    echo "Specify an e-mail address." >&2
+    exit 2
+fi
+
+case "$archive_format" in
+    tar)
+        case "$compression" in
+            bzip2)
+                compression_suffix=.bz2
+            ;;
+            gzip)
+                compression_suffix=.gz
+            ;;
+            "")
+                compression_suffix=
+            ;;
+            *)
+                echo "\"$compression\" is not a valid value for --compression" >&2
+                exit 2
+            ;;
+        esac
+        archive_name_suffix=.tar${compression_suffix}
+    ;;
+    7z)
+        archive_name_suffix=.7x
+    ;;
+    zip)
+        archive_name_suffix=.zip
+    ;;
+    *)
+        echo "\"$archive_format\" is not a valid value for --archiveformat" >&2
+        exit 2
+    ;;
+esac
+
+if [ -z "$ca_id" ]; then
+    server_certs="$(ls -1t "$ca_server_intermediate_dir/openssl/certs/"*.cert.pem | grep -v '/ca.cert.pem$' | grep -v '/ca-chain.cert.pem$' | sed 's/\.cert\.pem$//g' | sed 's/.*\///' | cut -d '-' -f 2-)"
+    if [ "$(echo "$server_certs" | wc -l)" -ne 1 ]; then
+        echo "There is more than 1 server key.  Use --servername to specify 1 of these:" >&2
+        echo "$server_certs" | sed 's/^/    /' >&2
+        exit 2
+    fi
+    ca_id=$server_certs
+fi
+
+if [ -z "$postgresql_host_name" ]; then
+    server_certs="$(ls -1t "$ca_server_intermediate_dir/openssl/certs/"*.cert.pem | grep -v '/ca.cert.pem$' | grep -v '/ca-chain.cert.pem$' | sed 's/\.cert\.pem$//g' | sed 's/.*\///' | cut -d '-' -f 2-)"
+    if [ "$(echo "$server_certs" | wc -l)" -ne 1 ]; then
+        postgresql_host_name=HOST-NAME
+    else
+        postgresql_host_name=$server_certs
+    fi
+fi
+
+pkg_tmp_dir=$(mktemp -d --suffix=_pgkey --tmpdir="$tmp_dir")
+client_key_name=${ca_id}-${key_name}
+pkg_archive_name="postgresql-key-${client_key_name}${archive_name_suffix}"
+pkg_archive_path="${pkg_tmp_dir}/${pkg_archive_name}"
+if [ $make_key -ne 0 ]; then
+    make_key_arg=--makekey
+else
+    make_key_arg=
+fi
+"$base_dir/bin/package_key_client" --datadirectory "$pg_config_dir" --archiveformat "$archive_format" --compression "$compression" --encryption "$encryption" $make_key_arg --caid "$ca_id" "$key_name" "$pkg_archive_path"
+
+mail -s "Client Key & Certificate for PostgreSQL User $key_name" -a "$pkg_archive_path" "$email_address" <<EOM
+Your PostgreSQL key & certificate is attached to this e-mail.
+
+Follow the instructions for your operating system:
+
+
+Windows:
+
+1) Open the attached archive file.
+
+2) Browse to your %appdata% folder.
+
+3) If a postgresql folder does not exist there, make it.
+
+4) In the archive file, extract the 4 files in the archive's .postgresql folder into the other postgresql folder.
+
+
+Mac / Linux:
+
+In the commands below, adjust the path of the archive file (if necessary), depending on where you saved it.
+
+cd ~
+unzip ~/postgresql.zip
+chmod 600 .postgresql/postgresql.key
+EOM
+
+rm "$pkg_archive_path"
+rmdir "$pkg_tmp_dir"

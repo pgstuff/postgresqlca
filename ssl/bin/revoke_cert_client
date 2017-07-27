@@ -1,0 +1,108 @@
+#! /bin/bash
+
+set -eu -o pipefail
+
+script_dir="$(dirname "$(readlink -f "$0")")"
+base_dir="$(dirname "$script_dir")"
+source "$base_dir/var/paths.sh"
+pg_config_dir=${PGDATA-}
+pg_config_path=
+pg_reload=0
+cert_users_file_name=ssl-cert_users
+cert_users_group_name="$(cat "$ca_server_intermediate_dir/var/server_cert_users_group_name.var")"
+
+function get_boolean() {
+    case "$(echo "$1" | tr '[:upper:]' '[:lower:]')" in
+        1|t|true|y|yes)
+            echo 1
+            return
+        ;;
+        0|f|false|n|no)
+            echo 0
+            return
+        ;;
+    esac
+    echo "Value \"$1\" is not a recognized boolean value." >&2
+    exit 2
+}
+
+parsed_args=$(getopt -o "d:c:r:" -l "datadirectory:,configfile:,reload:" -n "$(basename $0)" -- "$@")
+eval set -- "$parsed_args"
+while [[ $# -gt 1 ]]; do
+    case "$1" in
+        -d|--datadirectory)
+            pg_config_dir=$2
+            shift
+        ;;
+        -c|--configfile)
+            pg_config_path=$2
+            shift
+        ;;
+        -r|--reload)
+            pg_reload=$(get_boolean $2)
+            shift
+        ;;
+        --)
+            break
+        ;;
+        *)
+            exit 2
+        ;;
+    esac
+    shift
+done
+shift
+
+cert_seq="$1"
+cert_users_file_path=$pg_config_dir/$cert_users_file_name
+
+if [ -n "$pg_config_dir" ]; then
+    if [ -z "$pg_config_path" ]; then
+        if [ -e "$pg_config_dir/postgresql.conf" ]; then
+            pg_config_path=$pg_config_dir/postgresql.conf
+        fi
+    fi
+fi
+
+function revoke_cert_client() {
+    local ca_path=$1
+    local cert_seq=$2
+    local ca_pass=$3
+
+    exec 3<<<"$ca_pass"
+    "$ca_path/bin/revoke_cert" "$cert_seq"
+}
+
+ca_client_intermediate_pass=$(openssl aes-256-cbc -salt -a -d -k $(cat "$ssl_key_pass_path") -in "$ca_client_intermediate_pass_path")
+
+client_name=$("$base_dir/bin/list_certs_client" | grep "^${cert_seq}"$'\t' | cut -f 2)
+
+revoke_cert_client "$ca_client_intermediate_dir" "$cert_seq" "$ca_client_intermediate_pass"
+
+"$base_dir/bin/create_cert_rev_list_client_intermediate"
+"$base_dir/bin/install_crl_client_to_server" --datadirectory "$pg_config_dir" --configfile "$pg_config_path" --reload 0
+
+function grep_quote() {
+    echo "$1" | sed 's/\\/\\\\/g' | sed 's/\[/\\\[/g' | sed 's/\]/\\\]/g' | sed 's/\^/\\^/g' | sed 's/\$/\\$/g' | sed 's/\*/\\*/g' | sed 's/\./\\./g'
+}
+
+# If the user still has at least 1 valid certificate
+if grep -q "^$(grep_quote "${client_name}")\$" <("$base_dir/bin/list_certs_client" | cut -f 2); then
+    "$base_dir/bin/server_reload" -r $pg_reload
+    exit
+fi
+
+if grep -q "^$(grep_quote "${client_name}")\$" "$cert_users_file_path"; then
+    sed -i "/^$(grep_quote "${client_name}")\$/d" "$cert_users_file_path"
+    echo "Updated $cert_users_file_path"
+fi
+
+if [ -n "$cert_users_group_name" ]; then
+    role_count=$(psql -tAc "SELECT COUNT(*) FROM pg_authid AS ssl_group INNER JOIN pg_auth_members AS group_members ON (ssl_group.oid = group_members.roleid) INNER JOIN pg_authid AS ssl_member ON (group_members.member = ssl_member.oid) WHERE ssl_group.rolname = '$cert_users_group_name' AND ssl_member.rolname = '$client_name'")
+    if [ $role_count -ne 0 ]; then
+        echo "Removing user from certificate users group \"$cert_users_group_name\""
+        psql -c "ALTER GROUP \"$cert_users_group_name\" DROP USER \"$client_name\""
+    fi
+else
+    "$base_dir/bin/server_reload" -r $pg_reload
+fi

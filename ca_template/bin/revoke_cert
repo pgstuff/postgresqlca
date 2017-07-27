@@ -1,0 +1,15 @@
+#! /bin/bash
+
+set -eu -o pipefail
+
+script_dir="$(dirname "$(readlink -f "$0")")"
+base_dir="$(dirname "$script_dir")"
+
+cert_seq="$1"
+
+if [ ! -e "$base_dir/openssl/newcerts/$cert_seq.pem" ]; then
+    echo "The cert (\"$base_dir/openssl/newcerts/$cert_seq.pem\") does not exist." >&2
+    exit 2
+fi
+
+openssl ca -config "$base_dir/tmp/openssl.cnf" -passin fd:3 -batch -revoke "$base_dir/openssl/newcerts/$cert_seq.pem"

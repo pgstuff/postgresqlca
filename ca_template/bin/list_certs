@@ -1,0 +1,8 @@
+#! /bin/bash
+
+set -eu -o pipefail
+
+script_dir="$(dirname "$(readlink -f "$0")")"
+base_dir="$(dirname "$script_dir")"
+
+cat  "$base_dir/openssl/index.txt" | grep '^V' | sed 's/\/C=.*\/O=[^/]*\/CN=//' | awk -F "\t" '{ printf $4 "\t" $6 "\t" substr($2,1,4)"-"substr($2,5,2)"-"substr($2,7,2) "\n" }'

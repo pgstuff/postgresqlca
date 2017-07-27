@@ -9,7 +9,7 @@ source "$base_dir/var/paths.sh"
 server_host_name="$(hostname)"
 pg_config_dir=${PGDATA-}
 pg_config_path=
-pg_restart=0
+pg_reload=0
 ssl_config_name=ssl-server.conf
 
 function get_boolean() {
@@ -27,14 +27,8 @@ function get_boolean() {
     exit 2
 }
 
-parsed_args=$(getopt -o "d:c:r:" -l "datadirectory:,configfile:,restart:" -n "$(basename $0)" -- "$@")
-
-if [ $? -ne 0 ]; then
-    exit 1
-fi
-
+parsed_args=$(getopt -o "d:c:r:" -l "datadirectory:,configfile:,reload:" -n "$(basename $0)" -- "$@")
 eval set -- "$parsed_args"
-
 while [[ $# -gt 1 ]]; do
     case "$1" in
         -d|--datadirectory)
@@ -45,8 +39,8 @@ while [[ $# -gt 1 ]]; do
             pg_config_path=$2
             shift
         ;;
-        -r|--restart)
-            pg_restart=$(get_boolean $2)
+        -r|--reload)
+            pg_reload=$(get_boolean $2)
             shift
         ;;
         *)
@@ -66,13 +60,29 @@ fi
 
 ssl_config_path=${pg_config_dir}/${ssl_config_name}
 
-if [ ! -e "$ca_server_intermediate_dir/openssl/certs/$server_host_name.cert.pem" ]; then
-    echo "Cert \"$ca_server_intermediate_dir/openssl/certs/$server_host_name.cert.pem\" does not exist." >&2
+function grep_quote() {
+    echo "$1" | sed 's/\\/\\\\/g' | sed 's/\[/\\\[/g' | sed 's/\]/\\\]/g' | sed 's/\^/\\^/g' | sed 's/\$/\\$/g' | sed 's/\*/\\*/g' | sed 's/\./\\./g'
+}
+
+function get_last_cert() {
+    local server_host_name=$1
+    ls -v1 "$ca_server_intermediate_dir/openssl/certs/"*"-${server_host_name}.cert.pem" | grep "/openssl/certs/[0-9]*-$(grep_quote "$server_host_name")\.cert\.pem\$" | tail -n 1
+}
+
+key_path=$(get_last_cert "$server_host_name")
+serial_num=$(basename "$key_path" "-$server_host_name.cert.pem")
+
+if [ ! -e "$ca_server_intermediate_dir/openssl/certs/${serial_num}-${server_host_name}.cert.pem" ]; then
+    echo "Cert \"$ca_server_intermediate_dir/openssl/certs/${serial_num}-${server_host_name}.cert.pem\" does not exist." >&2
+    exit 2
+fi
+if [ ! -e "$ca_server_intermediate_dir/openssl/private/${serial_num}-${server_host_name}.key.pem" ]; then
+    echo "Key \"$ca_server_intermediate_dir/openssl/private/${serial_num}-${server_host_name}.key.pem\" does not exist." >&2
     exit 2
 fi
 
-cp -p "$ca_server_intermediate_dir/openssl/certs/$server_host_name.cert.pem" "$pg_config_dir/server.crt"
-cp -p "$ca_server_intermediate_dir/openssl/private/$server_host_name.key.pem" "$pg_config_dir/server.key"
+cp -p "$ca_server_intermediate_dir/openssl/certs/${serial_num}-${server_host_name}.cert.pem" "$pg_config_dir/server.crt"
+cp -p "$ca_server_intermediate_dir/openssl/private/${serial_num}-${server_host_name}.key.pem" "$pg_config_dir/server.key"
 
 cat > "$ssl_config_path" <<EOF
 ssl = on
@@ -86,9 +96,4 @@ if ! grep -q "include.*=.*${ssl_config_name}" "$pg_config_path"; then
     echo "Updated $pg_config_path"
 fi
 
-# For PostgreSQL 10 or above, change this to reload.
-if [ $pg_restart -ne 0 ]; then
-    echo -n "PostgreSQL "; pg_ctl restart
-else
-    echo 'You need to run "pg_ctl restart" to make these changes effective.'
-fi
+"$base_dir/bin/server_reload" -r $pg_reload

@@ -1,0 +1,257 @@
+#! /bin/bash
+
+set -eu -o pipefail
+
+script_dir="$(dirname "$(readlink -f "$0")")"
+base_dir="$(dirname "$script_dir")"
+source "$base_dir/var/paths.sh"
+
+tmp_dir=${tmp_dir-/dev/shm}
+pg_config_dir=${PGDATA-}
+archive_format=tar
+compression=bzip2
+encryption=aes256
+ca_id="$(cat "$ca_server_intermediate_dir/var/intermediate_ca_id.var")"
+client_ssl_mode="$(cat "$ca_client_intermediate_dir/var/client_default_ssl_mode.var")"
+postgresql_port="$(cat "$ca_client_intermediate_dir/var/client_default_port.var")"
+database_name="$(cat "$ca_client_intermediate_dir/var/client_default_database_name.var")"
+postgresql_host_name=
+#file_path=
+make_key=0
+
+parsed_args=$(getopt -o "a:c:d:e:i:ms:" -l "archiveformat:,compression:,datadirectory:,encryption:,caid:,makekey,postgresqlhostname:" -n "$(basename $0)" -- "$@")
+eval set -- "$parsed_args"
+while [[ $# -gt 1 ]]; do
+    case "$1" in
+        -a|--archiveformat)
+            archive_format=$2
+            shift
+        ;;
+        -c|--compression)
+            compression=$2
+            shift
+        ;;
+        -d|--datadirectory)
+            pg_config_dir=$2
+            shift
+        ;;
+        -e|--encryption)
+            encryption=$2
+            shift
+        ;;
+#        -f|--filepath)
+#            file_path=$2
+#            shift
+#        ;;
+        -i|--caid)
+            ca_id=$2
+            shift
+        ;;
+        -m|--makekey)
+            make_key=1
+        ;;
+        -s|--postgresqlhostname)
+            postgresql_host_name=$2
+            shift
+        ;;
+        --)
+            break
+        ;;
+        *)
+            exit 2
+        ;;
+    esac
+    shift
+done
+shift
+
+client_name=$1
+file_path=$2
+
+#if [ -z "$file_path" ]; then
+#    echo "Specify a filepath in --filepath." >&2
+#    exit 2
+#fi
+
+function grep_quote() {
+    echo "$1" | sed 's/\\/\\\\/g' | sed 's/\[/\\\[/g' | sed 's/\]/\\\]/g' | sed 's/\^/\\^/g' | sed 's/\$/\\$/g' | sed 's/\*/\\*/g' | sed 's/\./\\./g'
+}
+
+function get_last_cert() {
+    local ca_path=$1
+    local common_name=$2
+    ls -v1 "$ca_path/openssl/certs/"*"-${common_name}.cert.pem" | grep "/openssl/certs/[0-9]*-$(grep_quote "$common_name")\.cert\.pem\$" | tail -n 1
+}
+
+if [ -z "$ca_id" ]; then
+    server_certs="$(ls -1t "$ca_server_intermediate_dir/openssl/certs/"*.cert.pem | grep -v '/ca.cert.pem$' | grep -v '/ca-chain.cert.pem$' | sed 's/\.cert\.pem$//g' | sed 's/.*\///' | cut -d '-' -f 2-)"
+    if [ "$(echo "$server_certs" | wc -l)" -ne 1 ]; then
+        echo "There is more than 1 server key.  Use --postgresqlhostname to specify 1 of these:" >&2
+        echo "$server_certs" | sed 's/^/    /' >&2
+        exit 2
+    fi
+    ca_id=$server_certs
+fi
+
+if [ -z "$postgresql_host_name" ]; then
+    server_certs="$(ls -1t "$ca_server_intermediate_dir/openssl/certs/"*.cert.pem | grep -v '/ca.cert.pem$' | grep -v '/ca-chain.cert.pem$' | sed 's/\.cert\.pem$//g' | sed 's/.*\///' | cut -d '-' -f 2-)"
+    if [ "$(echo "$server_certs" | wc -l)" -ne 1 ]; then
+        postgresql_host_name=HOST-NAME
+    else
+        postgresql_host_name=$server_certs
+    fi
+fi
+
+if [ $make_key -ne 0 ]; then
+    "$base_dir/bin/create_key_client" "$client_name"
+    "$base_dir/bin/create_cert_sign_req_client" "$client_name"
+    "$base_dir/bin/sign_cert_req_client" --datadirectory "$pg_config_dir" "$client_name"
+fi
+
+client_key_path=$(get_last_cert "$ca_client_intermediate_dir" "$client_name")
+serial_num=$(basename "$client_key_path" "-$client_name.cert.pem")
+
+if [ ! -e "$ca_client_intermediate_dir/openssl/certs/${serial_num}-${client_name}.cert.pem" ]; then
+    echo "Cert \"$ca_client_intermediate_dir/openssl/certs/${serial_num}-${client_name}.cert.pem\" does not exist." >&2
+    exit 2
+fi
+if [ ! -e "$ca_client_intermediate_dir/openssl/private/${serial_num}-${client_name}.key.pem" ]; then
+    echo "Key \"$ca_client_intermediate_dir/openssl/private/${serial_num}-${client_name}.key.pem\" does not exist." >&2
+    exit 2
+fi
+
+deployed_cert_name=${ca_id}-${client_name}
+
+pkg_tmp_dir=$(mktemp -d --suffix=_pgkey --tmpdir="$tmp_dir")
+mkdir "$pkg_tmp_dir/.postgresql"
+cp -p "$ca_client_intermediate_dir/openssl/certs/${serial_num}-${client_name}.cert.pem" "$pkg_tmp_dir/.postgresql/${deployed_cert_name}.crt"
+cp -p "$ca_client_intermediate_dir/openssl/private/${serial_num}-${client_name}.key.pem" "$pkg_tmp_dir/.postgresql/${deployed_cert_name}.key"
+
+cp "$ca_server_intermediate_dir/openssl/certs/ca-chain.cert.pem" "$pkg_tmp_dir/.postgresql/$ca_id.crt"
+cat "$ca_server_root_dir/openssl/crl/ca.crl.pem" \
+    "$ca_server_intermediate_dir/openssl/crl/ca.crl.pem" > "$pkg_tmp_dir/.postgresql/$ca_id.crl"
+
+umask 077
+case "$archive_format" in
+    tar)
+        case "$compression" in
+            bzip2)
+                compression_flag=j
+                shift
+            ;;
+            gzip)
+                compression_flag=z
+                shift
+            ;;
+            "")
+                compression_flag=
+                shift
+            ;;
+            *)
+                echo "\"$compression\" is not a valid value for --compression" >&2
+                exit 2
+            ;;
+        esac
+
+        pushd "$pkg_tmp_dir" > /dev/null
+        #.tar.${compression_suffix}
+        if [ -n "$encryption" ]; then #aes256
+            tar -c${compression_flag} . | openssl enc -e -$encryption -out "$file_path"
+            echo "cd ~"
+            echo "openssl enc -d -$encryption -in $(basename "$file_path") | tar -x${compression_flag}"
+        else
+            tar -c${compression_flag}f "$file_path" .
+            echo "cd ~"
+            echo "tar -x${compression_flag}f $(basename "$file_path")"
+        fi
+        popd > /dev/null
+    ;;
+    7z)
+        pushd "$pkg_tmp_dir" > /dev/null
+        if [ -n "$encryption" ]; then
+            if [ "$encryption" != "aes256" ]; then
+                echo "\"$encryption\" is not a valid value for --encryption.  Use aes256." >&2
+                exit 2
+            fi
+            if [ -e "$file_path" ]; then
+                rm "$file_path"
+            fi
+            7za a -p "$file_path" .
+        else
+            if [ -e "$file_path" ]; then
+                rm "$file_path"
+            fi
+            7za a "$file_path" .
+        fi
+        echo "cd ~"
+        echo "7za x $(basename "$file_path")"
+        popd > /dev/null
+    ;;
+    zip)
+        if [ -x "$(command -v 7za)" ]; then
+            pushd "$pkg_tmp_dir" > /dev/null
+            if [ -n "$encryption" ]; then
+                if [ -e "$file_path" ]; then
+                    rm "$file_path"
+                fi
+                7za a -tzip -p -mem=$encryption "$file_path" .
+            else
+                if [ -e "$file_path" ]; then
+                    rm "$file_path"
+                fi
+                7za a -tzip "$file_path" .
+            fi
+            echo "cd ~"
+            echo "7za x $(basename "$file_path")"
+            popd > /dev/null
+        elif [ -x "$(command -v zip)" ]; then
+            pushd "$pkg_tmp_dir" > /dev/null
+            if [ "$encryption" == "zipcrypto" ]; then
+                if [ -e "$file_path" ]; then
+                    rm "$file_path"
+                fi
+                zip -e9r "$file_path" .
+            elif [ -z "$encryption" ]; then
+                if [ -e "$file_path" ]; then
+                    rm "$file_path"
+                fi
+                zip -9r "$file_path" .
+            else
+                echo "To use the zip format with strong encryption, install 7za" >&2
+                exit 2
+            fi
+            echo "cd ~"
+            echo "unzip $(basename "$file_path")"
+            popd > /dev/null
+        else
+            echo "To use the zip format, install 7za or zip" >&2
+            exit 2
+        fi
+    ;;
+    *)
+        echo "\"$archive_format\" is not a valid value for --archiveformat" >&2
+        exit 2
+    ;;
+esac
+
+rm -Rf "$pkg_tmp_dir"
+
+echo
+echo "psql \"host=$postgresql_host_name port=$postgresql_port user=$client_name dbname=$database_name sslcert=\$HOME/.postgresql/${deployed_cert_name}.crt sslkey=\$HOME/.postgresql/${deployed_cert_name}.key sslrootcert=\$HOME/.postgresql/$ca_id.crt sslcrl=\$HOME/.postgresql/$ca_id.crl sslmode=$client_ssl_mode\""
+echo
+cat <<EOT
+cat >> "\$HOME/.pg_service.conf" <<EOF
+[${postgresql_host_name}-${database_name}]
+host=$postgresql_host_name
+port=$postgresql_port
+user=$client_name
+dbname=$database_name
+sslcert=\$HOME/.postgresql/${deployed_cert_name}.crt
+sslkey=\$HOME/.postgresql/${deployed_cert_name}.key
+sslrootcert=\$HOME/.postgresql/$ca_id.crt
+sslcrl=\$HOME/.postgresql/$ca_id.crl
+sslmode=$client_ssl_mode
+EOF
+EOT
+echo
+echo "PGSERVICE=${postgresql_host_name}-${database_name} psql"

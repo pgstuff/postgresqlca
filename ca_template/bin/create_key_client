@@ -11,7 +11,7 @@ function load_vars() {
     local var_path="$base_dir/var"
 
     key_len="$(cat "$var_path/client_key_len.var")"
-    cipher="$(cat "$var_path/client_cipher.var")"
+    key_cipher="$(cat "$var_path/client_key_cipher.var")"
 }
 
 if [ -e "$base_dir/openssl/private/$client_name.key.pem" ]; then
@@ -21,13 +21,13 @@ fi
 
 load_vars
 
-if [ -n "$cipher" ]; then
-    cipher_opt=-$cipher
+if [ -n "$key_cipher" ]; then
+    key_cipher_opt=-$key_cipher
 else
-    cipher_opt=
+    key_cipher_opt=
 fi
 
-openssl genrsa $cipher_opt -passout fd:3 \
+openssl genrsa $key_cipher_opt -passout fd:3 \
     -out "$base_dir/openssl/private/$client_name.key.pem" "$key_len"
 
 chmod 600 "$base_dir/openssl/private/$client_name.key.pem"
