@@ -1,6 +1,7 @@
 #! /bin/bash
 
-set -eu -o pipefail
+set -euo pipefail
+shopt -s failglob
 
 function get_header_line() {
     local header_name=$1

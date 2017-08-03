@@ -1,0 +1,52 @@
+#! /bin/bash
+
+set -euo pipefail
+shopt -s failglob
+
+tmp_dir=/dev/shm
+pg_config_dir=PG_DATA_DIR_PLACEHOLDER
+ssl_dir=${pg_config_dir}/ssl
+package_key_client_path=${ssl_dir}/bin/package_key_client
+postgres_user=PG_RUN_AS_USER_PLACEHOLDER
+
+if [ ! -x "$package_key_client_path" ]; then
+    echo "package_key_client program at \"${package_key_client_path}\" not found or not executable." >&2
+    exit 2
+fi
+
+if [ -z "${SUDO_USER-}" ]; then
+    # set +e
+    # "$package_key_client_path" "$@"
+    # exit $?
+    echo "Run via sudo." >&2
+    exit 2
+fi
+
+if [ $# -lt 2 ]; then
+    sudo -u "$postgres_user" "$package_key_client_path" "$@"
+fi
+
+file_path="${!#}"
+
+pkg_tmp_dir=$(mktemp -d --suffix=_pgkey --tmpdir="$tmp_dir")
+chown "$postgres_user" "$pkg_tmp_dir"
+
+pkg_file_name="$(basename "$file_path")"
+pkg_file_path="${pkg_tmp_dir}/${pkg_file_name}"
+
+set -- "${@:1:$(($#-1))}" "$pkg_file_path"
+
+set +e
+sudo -u "$postgres_user" "$package_key_client_path" -d "$pg_config_dir" "$@"
+exit_status=$?
+set -e
+
+if [ -e "$pkg_file_path" ]; then
+    chown "$SUDO_USER" "$pkg_file_path"
+    cp -p "$pkg_file_path" "$file_path"
+    rm -f "$pkg_file_path"
+fi
+
+rmdir "$pkg_tmp_dir"
+
+exit $exit_status

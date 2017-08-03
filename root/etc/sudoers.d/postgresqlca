@@ -1,0 +1,1 @@
+%PG_REQUIRED_GROUP_PLACEHOLDER ALL=(root) /usr/local/bin/pg_package_key_client

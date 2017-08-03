@@ -11,12 +11,16 @@ cd /tmp
 git clone https://github.com/pgstuff/postgresqlca.git
 cd postgresqlca
 ./install.sh
+exit
+sudo /tmp/postgresqlca/install-root.sh -d "$PGDATA"
 
 Follow the on screen instructions for editing $PGDATA/pg_hba.conf
 
 For PostgreSQL 9.x, restart the server.  For PostgreSQL 10 and above, use reload instead.
 
 A group called ssl_cert_users is created to route certificate users to the proper line in pg_hba.conf.  Users will use that rule exclusively when they have any unrevoked certificates.  If all certificates are revoked for a user, then a later HBA rule must match in order for the user to log in with an alternative method.  If there are no other matching HBA rules, then access will be denied.  This will have an immediate effect, unlike the CRL, which must be reloaded.
+
+Every executable installed into the $PGDATA directory is designed to run as the postgres user.  pg_package_key_client is installed outside of that and is designed to be run as root.  It will execute the package_key_client executable as the postgres user and will change the ownership of the output file to the user who originally ran pg_package_key_client.
 
 To create a new certificate for an existing PostgreSQL user, as the postgres user (prefix these with "sudo -u postgres"), run:
 

@@ -1,6 +1,7 @@
 #! /bin/bash
 
-set -eu -o pipefail
+set -euo pipefail
+shopt -s failglob
 
 script_dir="$(dirname "$(readlink -f "$0")")"
 base_dir="$(dirname "$script_dir")"
@@ -18,8 +19,9 @@ database_name="$(cat "$ca_client_intermediate_dir/var/client_default_database_na
 postgresql_host_name=
 #file_path=
 make_key=0
+key_format=pem
 
-parsed_args=$(getopt -o "a:c:d:e:i:ms:" -l "archiveformat:,compression:,datadirectory:,encryption:,caid:,makekey,postgresqlhostname:" -n "$(basename $0)" -- "$@")
+parsed_args=$(getopt -o "a:c:d:e:i:k:ms:" -l "archiveformat:,compression:,datadirectory:,encryption:,caid:,keyformat:,makekey,postgresqlhostname:" -n "$(basename $0)" -- "$@")
 eval set -- "$parsed_args"
 while [[ $# -gt 1 ]]; do
     case "$1" in
@@ -47,6 +49,20 @@ while [[ $# -gt 1 ]]; do
             ca_id=$2
             shift
         ;;
+        -k|--keyformat)
+            key_format=$2
+            shift
+            case "$key_format" in
+                pem)
+                ;;
+                pkcs-8-der)
+                ;;
+                *)
+                    echo "\"$key_format\" is not a valid value for --keyformat.  Use pem or pkcs-8-der." >&2
+                    exit 2
+                ;;
+            esac
+        ;;
         -m|--makekey)
             make_key=1
         ;;
@@ -65,6 +81,20 @@ while [[ $# -gt 1 ]]; do
 done
 shift
 
+case "$key_format" in
+    pem)
+        key_extn_source=.key.pem
+        key_extn_out=.key
+    ;;
+    pkcs-8-der)
+        key_extn_source=.key.pk8
+        key_extn_out=.pk8
+    ;;
+    *)
+        exit 2
+    ;;
+esac
+
 client_name=$1
 file_path=$2
 
@@ -72,6 +102,10 @@ file_path=$2
 #    echo "Specify a filepath in --filepath." >&2
 #    exit 2
 #fi
+
+if [ ! -e "$PWD" ]; then
+    cd /tmp
+fi
 
 function grep_quote() {
     echo "$1" | sed 's/\\/\\\\/g' | sed 's/\[/\\\[/g' | sed 's/\]/\\\]/g' | sed 's/\^/\\^/g' | sed 's/\$/\\$/g' | sed 's/\*/\\*/g' | sed 's/\./\\./g'
@@ -115,8 +149,8 @@ if [ ! -e "$ca_client_intermediate_dir/openssl/certs/${serial_num}-${client_name
     echo "Cert \"$ca_client_intermediate_dir/openssl/certs/${serial_num}-${client_name}.cert.pem\" does not exist." >&2
     exit 2
 fi
-if [ ! -e "$ca_client_intermediate_dir/openssl/private/${serial_num}-${client_name}.key.pem" ]; then
-    echo "Key \"$ca_client_intermediate_dir/openssl/private/${serial_num}-${client_name}.key.pem\" does not exist." >&2
+if [ ! -e "$ca_client_intermediate_dir/openssl/private/${serial_num}-${client_name}${key_extn_source}" ]; then
+    echo "Key \"$ca_client_intermediate_dir/openssl/private/${serial_num}-${client_name}${key_extn_source}\" does not exist." >&2
     exit 2
 fi
 
@@ -125,7 +159,7 @@ deployed_cert_name=${ca_id}-${client_name}
 pkg_tmp_dir=$(mktemp -d --suffix=_pgkey --tmpdir="$tmp_dir")
 mkdir "$pkg_tmp_dir/.postgresql"
 cp -p "$ca_client_intermediate_dir/openssl/certs/${serial_num}-${client_name}.cert.pem" "$pkg_tmp_dir/.postgresql/${deployed_cert_name}.crt"
-cp -p "$ca_client_intermediate_dir/openssl/private/${serial_num}-${client_name}.key.pem" "$pkg_tmp_dir/.postgresql/${deployed_cert_name}.key"
+cp -p "$ca_client_intermediate_dir/openssl/private/${serial_num}-${client_name}${key_extn_source}" "$pkg_tmp_dir/.postgresql/${deployed_cert_name}${key_extn_out}"
 
 cp "$ca_server_intermediate_dir/openssl/certs/ca-chain.cert.pem" "$pkg_tmp_dir/.postgresql/$ca_id.crt"
 cat "$ca_server_root_dir/openssl/crl/ca.crl.pem" \
@@ -237,7 +271,7 @@ esac
 rm -Rf "$pkg_tmp_dir"
 
 echo
-echo "psql \"host=$postgresql_host_name port=$postgresql_port user=$client_name dbname=$database_name sslcert=\$HOME/.postgresql/${deployed_cert_name}.crt sslkey=\$HOME/.postgresql/${deployed_cert_name}.key sslrootcert=\$HOME/.postgresql/$ca_id.crt sslcrl=\$HOME/.postgresql/$ca_id.crl sslmode=$client_ssl_mode\""
+echo "psql \"host=$postgresql_host_name port=$postgresql_port user=$client_name dbname=$database_name sslcert=\$HOME/.postgresql/${deployed_cert_name}.crt sslkey=\$HOME/.postgresql/${deployed_cert_name}${key_extn_out} sslrootcert=\$HOME/.postgresql/$ca_id.crt sslcrl=\$HOME/.postgresql/$ca_id.crl sslmode=$client_ssl_mode\""
 echo
 cat <<EOT
 cat >> "\$HOME/.pg_service.conf" <<EOF
@@ -247,7 +281,7 @@ port=$postgresql_port
 user=$client_name
 dbname=$database_name
 sslcert=\$HOME/.postgresql/${deployed_cert_name}.crt
-sslkey=\$HOME/.postgresql/${deployed_cert_name}.key
+sslkey=\$HOME/.postgresql/${deployed_cert_name}${key_extn_out}
 sslrootcert=\$HOME/.postgresql/$ca_id.crt
 sslcrl=\$HOME/.postgresql/$ca_id.crl
 sslmode=$client_ssl_mode

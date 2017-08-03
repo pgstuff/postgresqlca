@@ -1,6 +1,7 @@
 #! /bin/bash
 
-set -eu -o pipefail
+set -euo pipefail
+shopt -s failglob
 
 pg_reload=0
 

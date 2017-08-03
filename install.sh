@@ -1,6 +1,8 @@
 #! /bin/bash
 
-set -eu -o pipefail
+set -euo pipefail
+shopt -s failglob
+
 script_root=$(dirname "$(readlink -f "$0")")
 pg_config_dir=${PGDATA-}
 create_user_cert=0
@@ -125,6 +127,7 @@ fi
 
 cp -r "$script_root/ssl" "$ssl_dir"
 cp -r "$script_root/ca_template" "$ca_template_dir"
+find "$ca_template_dir" -name .gitignore -delete
 
 if [ -z "${ssl_key_pass-}" ]; then
     ssl_key_pass=$(mkpasswd -l 32 -d 4 -c 4 -C 4 -s 4)
